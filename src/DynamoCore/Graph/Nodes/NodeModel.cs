@@ -5,12 +5,14 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Serialization;
 using System.Xml;
 using Dynamo.Configuration;
 using Dynamo.Engine;
 using Dynamo.Engine.CodeGeneration;
 using Dynamo.Graph.Connectors;
 using Dynamo.Graph.Nodes.CustomNodes;
+using Dynamo.Graph.Workspaces;
 using Dynamo.Migration;
 using Dynamo.Scheduler;
 using Dynamo.Selection;
@@ -23,8 +25,6 @@ using ProtoCore.DSASM;
 using ProtoCore.Mirror;
 using String = System.String;
 using StringNode = ProtoCore.AST.AssociativeAST.StringNode;
-using System.Runtime.Serialization;
-using Dynamo.Graph.Workspaces;
 
 namespace Dynamo.Graph.Nodes
 {
@@ -35,6 +35,8 @@ namespace Dynamo.Graph.Nodes
         private LacingStrategy argumentLacing = LacingStrategy.Auto;
         private bool displayLabels;
         private bool isVisible;
+        private bool isSetAsInput = false;
+        private bool isSetAsOutput = false;
         private bool canUpdatePeriodically;
         private string name;
         private ElementState state;
@@ -210,7 +212,6 @@ namespace Dynamo.Graph.Nodes
             }
         }
 
-        private bool isSetAsInput = false;
         /// <summary>
         /// This property is user-controllable via a checkbox and is set to true when a user wishes to include
         /// this node in a Customizer as an interactive control.
@@ -228,7 +229,11 @@ namespace Dynamo.Graph.Nodes
 
             set
             {
-                isSetAsInput = value;
+                if (isSetAsInput != value)
+                {
+                    isSetAsInput = value;
+                    RaisePropertyChanged(nameof(IsSetAsInput));
+                }
             }
         }
 
@@ -245,8 +250,6 @@ namespace Dynamo.Graph.Nodes
                 return !IsCustomFunction;
             }
         }
-
-        private bool isSetAsOutput = false;
 
         /// <summary>
         /// This property is user-controllable via a checkbox and is set to true when a user wishes to include
@@ -265,7 +268,11 @@ namespace Dynamo.Graph.Nodes
 
             set
             {
-                isSetAsOutput = value;
+                if (isSetAsOutput != value)
+                {
+                    isSetAsOutput = value;
+                    RaisePropertyChanged(nameof(IsSetAsOutput));
+                }
             }
         }
 

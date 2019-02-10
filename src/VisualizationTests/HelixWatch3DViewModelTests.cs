@@ -64,6 +64,11 @@ namespace WpfVisualizationTests
 
         protected override void StartDynamo(TestSessionConfiguration testConfig)
         {
+            // Add Dynamo Core location to the PATH system environment variable.
+            // This is to make sure dependencies(e.g.Helix assemblies) can be located.
+            var path = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.Process) + ";" + testConfig.DynamoCorePath;
+            Environment.SetEnvironmentVariable("Path", path, EnvironmentVariableTarget.Process);
+
             var preloader = new Preloader(testConfig.DynamoCorePath, new[] { testConfig.RequestedLibraryVersion2 });
             preloader.Preload();
 
@@ -172,7 +177,7 @@ namespace WpfVisualizationTests
         }
 
         [Test]
-        public void Node_PreviewUpstreamToggled_RenderingUpToDate()
+        public void Node_PreviewToggled_RenderingUpToDate()
         {
             var model = ViewModel.Model;
 
@@ -183,7 +188,7 @@ namespace WpfVisualizationTests
             //we start with all previews disabled
             //the graph is two points feeding into a line
 
-            //ensure that visulations match our expectations
+            //ensure that visualizations match our expectations
             Assert.True(BackgroundPreviewGeometry.HasNumberOfPointsCurvesAndMeshes(7, 6, 0));
 
             var watch3D = Model.CurrentWorkspace.FirstNodeFromWorkspace<Watch3D>();

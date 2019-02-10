@@ -5,16 +5,32 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-
+using System.Text.RegularExpressions;
 
 namespace DynamoShapeManager
 {
     public static class Utilities
     {
+        /// <summary>
+        /// Key words for Products containing ASM binaries
+        /// </summary>
+        private static readonly List<string> ProductsWithASM = new List<string>() { "Revit", "Civil", "FormIt" };
+
+        #region public properties
         public static readonly string GeometryFactoryAssembly = "LibG.ProtoInterface.dll";
         public static readonly string PreloaderAssembly = "LibG.AsmPreloader.Managed.dll";
         public static readonly string PreloaderClassName = "Autodesk.LibG.AsmPreloader";
+
+        /// <summary>
+        /// This method is defined in libG.AsmPreloader for actual ASM preload
+        /// </summary>
         public static readonly string PreloaderMethodName = "PreloadAsmLibraries";
+
+        /// <summary>
+        /// The mask to filter ASM binary
+        /// </summary>
+        public static readonly string ASMFileMask = "ASMAHL*.dll";
+        #endregion
 
 
         /// <summary>
@@ -74,7 +90,7 @@ namespace DynamoShapeManager
                     if (!dir.Exists)
                         continue;
 
-                    var files = dir.GetFiles("ASMAHL*.dll");
+                    var files = dir.GetFiles(ASMFileMask);
                     if (!files.Any())
                         continue;
 
@@ -131,24 +147,38 @@ namespace DynamoShapeManager
                 getASMInstallsFunc = getASMInstallsFunc ?? GetAsmInstallations;
                 var installations = getASMInstallsFunc(rootFolder);
 
-                //first find the closest matches using major, minor and build version.
+                // first find the exact match or the lowest matching within same major version
                 foreach (var version in versions)
                 {
+                    Dictionary<Version, string> versionToLocationDic = new Dictionary<Version, string>();
                     foreach (KeyValuePair<string, Tuple<int, int, int, int>> install in installations)
                     {
                         var installVersion = new Version(install.Value.Item1, install.Value.Item2, install.Value.Item3);
-                        if (version.Major == installVersion.Major &&
-                            version.Minor == installVersion.Minor &&
-                            version.Build == installVersion.Build)
+                        if (version.Major == installVersion.Major && !versionToLocationDic.ContainsKey(installVersion))
                         {
-                            location = install.Key;
+                            versionToLocationDic.Add(installVersion, install.Key);
+                        }
+                    }
+
+                    // When there is major version matching, continue the search
+                    if (versionToLocationDic.Count != 0)
+                    {
+                        versionToLocationDic.TryGetValue(version, out location);
+                        // If exact matching version found, return it
+                        if (location != null)
+                        {
                             return version;
+                        }
+                        // If no matching version, return the lowest within same major
+                        else
+                        {
+                            location = versionToLocationDic[versionToLocationDic.Keys.Min()];
+                            return versionToLocationDic.Keys.Min();
                         }
                     }
                 }
 
-                //Fallback mechanism, look inside libg folders if any of them
-                //contain ASM dlls.
+                // Fallback mechanism, look inside libg folders if any of them contains ASM dlls.
                 foreach (var v in versions)
                 {
                     var folderName = string.Format("libg_{0}_{1}_{2}", v.Major, v.Minor, v.Build);
@@ -156,12 +186,12 @@ namespace DynamoShapeManager
                     if (!dir.Exists)
                         continue;
 
-                    var files = dir.GetFiles("ASMAHL*.dll");
+                    var files = dir.GetFiles(ASMFileMask);
                     if (!files.Any())
                         continue;
 
                     location = dir.FullName;
-                    return v; // Found version.
+                    return v;
                 }
             }
             catch (Exception)
@@ -170,6 +200,58 @@ namespace DynamoShapeManager
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Get the corresponding libG preloader location for the target ASM loading version.
+        /// If there is exact match preloader version to the target ASM version, use it, 
+        /// otherwise use the closest below.
+        /// </summary>
+        /// <param name="version">The target loading version of ASM.</param>
+        /// <param name="rootFolder">Full path of the directory that contains 
+        /// LibG_major_minor_build folder. In a 
+        /// typical setup this would be the same directory that contains Dynamo 
+        /// core modules. This must represent a valid directory.</param>
+        /// <returns></returns>
+        public static string GetLibGPreloaderLocation(Version version, string rootFolder)
+        {
+            if (version == null)
+            {
+                version = new Version(0, 0, 0);
+            }
+
+            var libGFolderName = string.Format("libg_{0}_{1}_{2}", version.Major, version.Minor, version.Build);
+            var dir = new DirectoryInfo(Path.Combine(rootFolder, libGFolderName));
+            if (dir.Exists)
+            {
+                return dir.FullName;
+            }
+            else
+            {
+                // This usually means libG preloader version is behind the target version
+                var rootDir = new DirectoryInfo(rootFolder);
+
+                // Use regex to get all the libG versions supported
+                var libgFolders = rootDir.EnumerateDirectories("libg_*", SearchOption.TopDirectoryOnly);
+                var regExp = new Regex(@"^libg_(\d\d\d)_(\d)_(\d)$", RegexOptions.IgnoreCase);
+                var preloaderVersions = new List<Version>();
+                foreach (var folder in libgFolders)
+                {
+                    var match = regExp.Match(folder.Name);
+                    if (match.Groups.Count == 4 && Convert.ToInt32(match.Groups[1].Value) <= version.Major)
+                    {
+                        preloaderVersions.Add(new Version(
+                                Convert.ToInt32(match.Groups[1].Value),
+                                Convert.ToInt32(match.Groups[2].Value),
+                                Convert.ToInt32(match.Groups[3].Value)));
+                    }
+                }
+                preloaderVersions.Sort();
+                preloaderVersions.Reverse();
+                // Pick the closest preloader version below or use the default value when no libG folder found
+                var preloaderVersion = preloaderVersions.FirstOrDefault() == null ? version : preloaderVersions.First();
+                return Path.Combine(rootFolder, string.Format("libg_{0}_{1}_{2}", preloaderVersion.Major, preloaderVersion.Minor, preloaderVersion.Build));
+            }
         }
 
         /// <summary>
@@ -204,16 +286,16 @@ namespace DynamoShapeManager
 
             if (string.IsNullOrEmpty(preloaderLocationToLoad))
             {
-                throw new ArgumentException("preloadedPath");
-
+                throw new ArgumentException("Invalid LibG preloader location for ASM at " + asmLocation);
             }
             if (string.IsNullOrEmpty(asmLocation) || !Directory.Exists(asmLocation))
-                throw new ArgumentException("asmLocation");
-
+            {
+                throw new ArgumentException("Invalid ASM location " + asmLocation);
+            }
             var preloaderPath = Path.Combine(preloaderLocationToLoad, PreloaderAssembly);
 
-            Debug.WriteLine(string.Format("ASM Preloader: {0}", preloaderPath));
-            Debug.WriteLine(string.Format("ASM Location: {0}", asmLocation));
+            Debug.WriteLine(string.Format("LibG ASM Preloader location: {0}", preloaderPath));
+            Debug.WriteLine(string.Format("ASM loading location: {0}", asmLocation));
 
             var libG = Assembly.LoadFrom(preloaderPath);
             var preloadType = libG.GetType(PreloaderClassName);
@@ -341,7 +423,7 @@ namespace DynamoShapeManager
             var type = assembly.GetType("DynamoInstallDetective.Utilities");
 
             var installationsMethod = type.GetMethod(
-                "FindProductInstallations",
+                "FindMultipleProductInstallations",
                 BindingFlags.Public | BindingFlags.Static);
 
             if (installationsMethod == null)
@@ -349,7 +431,8 @@ namespace DynamoShapeManager
                 throw new MissingMethodException("Method 'DynamoInstallDetective.Utilities.FindProductInstallations' not found");
             }
 
-            var methodParams = new object[] { "Revit", "ASMAHL*.dll" };
+
+            var methodParams = new object[] { ProductsWithASM, ASMFileMask };
             return installationsMethod.Invoke(null, methodParams) as IEnumerable;
         }
     }
