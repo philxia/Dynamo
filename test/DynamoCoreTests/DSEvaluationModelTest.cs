@@ -1187,6 +1187,20 @@ namespace Dynamo.Tests
             AssertPreviewValue(guidY, new object[] { null, null, null, 10.2 });
             AssertPreviewValue(guidZ, new object[] { null, null, null, 15.2 });
         }
+
+        [Test, Category("UnitTests")]
+        public void ReplicationWithEmptySubLists()
+        {
+            RunModel(@"core\dsevaluation\Replication_EmptySublist.dyn");
+            var guidCurveLength = "1b247af2b1c046fb9f8e3e27761ab5a9";
+            var guidCodeBlock = Guid.Parse("b9dec880d99347eb8a203783f54763e6");
+            AssertPreviewValue(guidCurveLength, new object[] { new object[] { }, new object[] { 6.283185 } });
+
+            var command = new Models.DynamoModel.UpdateModelValueCommand(Guid.Empty, guidCodeBlock, "Code", @"[[c],[]]");
+            CurrentDynamoModel.ExecuteCommand(command);
+            RunCurrentModel();
+            AssertPreviewValue(guidCurveLength, new object[] { new object[] { 6.283185 }, new object[] { } });
+        }
     }
 
     [Category("DSCustomNode")]
@@ -1358,6 +1372,26 @@ namespace Dynamo.Tests
             var dynFilePath = Path.Combine(TestDirectory, @"core\CustomNodes\10015.dyn");
             RunModel(dynFilePath);
             AssertPreviewValue("deb457c6-1b4b-4703-9476-db312b34a8e2", new object[] { null, null, null, null });
+        }
+
+        [Test]
+        public void LogicUINodesDeleted()
+        {
+            RunModel(@"core\dsevaluation\testuilogicnodes.dyn");
+            this.CurrentDynamoModel.CurrentWorkspace.RequestRun();
+            var codeblock = this.CurrentDynamoModel.CurrentWorkspace.Nodes.Where(x => x.Name == "Code Block").First();
+            var uiANDnode = this.CurrentDynamoModel.CurrentWorkspace.Nodes.Where(x => x.Name == "And").First();
+            var ztANDnode = this.CurrentDynamoModel.CurrentWorkspace.Nodes.Where(x => x.Name == "&&").First();
+            AssertPreviewValue(ztANDnode.GUID.ToString(),  true);
+
+
+            //delete binary expression AND node
+            this.CurrentDynamoModel.CurrentWorkspace.RemoveAndDisposeNode(uiANDnode);
+            this.CurrentDynamoModel.CurrentWorkspace.RequestRun();
+
+            //assert other node value is still valid
+            AssertPreviewValue(ztANDnode.GUID.ToString(), true);
+            AssertPreviewValue(codeblock.GUID.ToString(), true);
         }
     }
 

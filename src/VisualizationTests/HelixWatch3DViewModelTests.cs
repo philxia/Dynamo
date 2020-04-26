@@ -31,7 +31,6 @@ using SystemTestServices;
 using TestServices;
 using Watch3DNodeModels;
 using Watch3DNodeModelsWpf;
-using Buffer = SharpDX.Toolkit.Graphics.Buffer;
 using Color = System.Windows.Media.Color;
 using GeometryModel3D = HelixToolkit.Wpf.SharpDX.GeometryModel3D;
 using Model3D = HelixToolkit.Wpf.SharpDX.Model3D;
@@ -87,32 +86,55 @@ namespace WpfVisualizationTests
                 }
             }
 
-            Model = DynamoModel.Start(
-                new DynamoModel.DefaultStartConfiguration()
-                {
-                    StartInTestMode = true,
-                    PathResolver = pathResolver,
-                    GeometryFactoryPath = preloader.GeometryFactoryPath,
-                    UpdateManager = this.UpdateManager,
-                    ProcessMode = TaskProcessMode.Synchronous
-                });
+            Model = CreateModel(new DynamoModel.DefaultStartConfiguration()
+            {
+                StartInTestMode = true,
+                PathResolver = pathResolver,
+                GeometryFactoryPath = preloader.GeometryFactoryPath,
+                UpdateManager = this.UpdateManager,
+                ProcessMode = TaskProcessMode.Synchronous
+            });
 
-            ViewModel = DynamoViewModel.Start(
-                new DynamoViewModel.StartConfiguration()
-                {
-                    DynamoModel = Model,
-                    Watch3DViewModel = 
-                        HelixWatch3DViewModel.TryCreateHelixWatch3DViewModel(
-                            null,
-                            new Watch3DViewModelStartupParams(Model), 
-                            Model.Logger)
-                });
+            Model.EvaluationCompleted += Model_EvaluationCompleted;
+
+            var vmConfig = CreateViewModelStartConfiguration();
+            vmConfig.DynamoModel = Model;
+
+            ViewModel = DynamoViewModel.Start(vmConfig);
 
             //create the view
             View = new DynamoView(ViewModel);
             View.Show();
 
             SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+        }
+
+        /// <summary>
+        /// Derived test classes can override this method to provide a customized Dynamo model.
+        /// </summary>
+        protected virtual DynamoModel CreateModel(DynamoModel.IStartConfiguration configuration)
+        {
+            return DynamoModel.Start(configuration);
+        }
+
+        /// <summary>
+        /// Derived test classes can override this method to provide a customized view model configuration.
+        /// </summary>
+        protected virtual DynamoViewModel.StartConfiguration CreateViewModelStartConfiguration()
+        {
+            return new DynamoViewModel.StartConfiguration()
+            {
+                DynamoModel = Model,
+                Watch3DViewModel = HelixWatch3DViewModel.TryCreateHelixWatch3DViewModel(
+                    null,
+                    new Watch3DViewModelStartupParams(Model),
+                    Model.Logger)
+            };
+        }
+
+        private async void Model_EvaluationCompleted(object sender, EvaluationCompletedEventArgs e)
+        {
+            DispatcherUtil.DoEvents();
         }
 
         protected void OpenVisualizationTest(string fileName)
@@ -127,6 +149,13 @@ namespace WpfVisualizationTests
             }
 
             ViewModel.OpenCommand.Execute(relativePath);
+        }
+
+        // With version 2.5 NUnit will call base class TearDown methods after those in the derived classes
+        [TearDown]
+        private void CleanUp()
+        {
+            Model.EvaluationCompleted -= Model_EvaluationCompleted;
         }
     }
 
@@ -183,12 +212,7 @@ namespace WpfVisualizationTests
 
             OpenVisualizationTest("ASM_points_line.dyn");
 
-            DispatcherUtil.DoEvents();
-
-            //we start with all previews disabled
-            //the graph is two points feeding into a line
-
-            //ensure that visualizations match our expectations
+            // Verify that visualizations match our expectations
             Assert.True(BackgroundPreviewGeometry.HasNumberOfPointsCurvesAndMeshes(7, 6, 0));
 
             var watch3D = Model.CurrentWorkspace.FirstNodeFromWorkspace<Watch3D>();
@@ -197,8 +221,7 @@ namespace WpfVisualizationTests
             var view = FindFirstWatch3DNodeView();
             var vm = view.ViewModel as HelixWatch3DNodeViewModel;
             Assert.NotNull(vm);
-
-           
+   
             Assert.True(vm.SceneItems.HasNumberOfPointsCurvesAndMeshes(0,6,0));
         }
 
@@ -251,7 +274,7 @@ namespace WpfVisualizationTests
             OpenVisualizationTest("Labels.dyn");
 
             // check all the nodes and connectors are loaded
-            Assert.AreEqual(2, model.CurrentWorkspace.Nodes.Count());
+            Assert.AreEqual(3, model.CurrentWorkspace.Nodes.Count());
 
             //before we run the expression, confirm that all nodes
             //have label display set to false - the default
@@ -576,12 +599,9 @@ namespace WpfVisualizationTests
         {
             OpenVisualizationTest("FirstRunWatch3D.dyn");
 
-            // Clear the dispatcher to ensure that the 
-            // view is created.
-            DispatcherUtil.DoEvents();
-
             var view = FindFirstWatch3DNodeView();
             var vm = view.ViewModel as HelixWatch3DNodeViewModel;
+
             Assert.AreEqual(vm.SceneItems.Count(), 3);
         }
 
@@ -589,10 +609,6 @@ namespace WpfVisualizationTests
         public void Watch3D_Disconnect_Reconnect_CorrectRenderings()
         {
             OpenVisualizationTest("ASM_points_line.dyn");
-
-            // Clear the dispatcher to ensure that the 
-            // view is created.
-            DispatcherUtil.DoEvents();
 
             var ws = ViewModel.Model.CurrentWorkspace as HomeWorkspaceModel;
 
@@ -618,7 +634,8 @@ namespace WpfVisualizationTests
             ViewModel.Model.ExecuteCommand(cmd1);
             ViewModel.Model.ExecuteCommand(cmd2);
 
-            Assert.AreEqual(6, view.View.Items.Count);
+            // View contains 3 default items and a collection of lines from the node connected to the Watch3D node
+            Assert.AreEqual(4, view.View.Items.Count);
         }
 
         [Test]
@@ -720,27 +737,117 @@ namespace WpfVisualizationTests
         }
 
         [Test]
+        public void Display_FrozenNode_HasTransparentMesh()
+        {
+            OpenVisualizationTest("Display.ByGeometryColor.dyn");
+            RunCurrentModel();
+            Assert.AreEqual(4, BackgroundPreviewGeometry.Count());
+            DynamoCoreWpfTests.Utility.DispatcherUtil.DoEvents();
+            var dynGeometry = BackgroundPreviewGeometry.OfType<DynamoGeometryModel3D>();
+            Assert.AreEqual(1, dynGeometry.FirstOrDefault().Geometry.Colors.FirstOrDefault().Alpha);
+            // Freeze the ByGeometryColor node making the corresponding alpha channel value decrease
+            Model.CurrentWorkspace.Nodes.Where(x => x.Name.Contains("ByGeometryColor")).FirstOrDefault().IsFrozen = true;
+            DynamoCoreWpfTests.Utility.DispatcherUtil.DoEvents();
+            Assert.AreEqual(0.5, dynGeometry.FirstOrDefault().Geometry.Colors.FirstOrDefault().Alpha);
+        }
+
+        [Test]
         public void Display_ByGeometryColor_HasColoredMesh()
         {
             OpenVisualizationTest("Display.ByGeometryColor.dyn");
-
-            var ws = ViewModel.Model.CurrentWorkspace as HomeWorkspaceModel;
-
             RunCurrentModel();
 
+            Assert.AreEqual(4, BackgroundPreviewGeometry.Count());
+            // Check if there is any vertices matching color "Color.ByARGB(255,255,0,255)
             Assert.True(BackgroundPreviewGeometry.HasAnyMeshVerticesOfColor(new Color4(new Color3(1.0f, 0, 1.0f))));
+
+            // These checks are more specific to this test
+            // Expecting 36 color definitions for vertices in the Dynamo Geometry
+            var dynGeometry = BackgroundPreviewGeometry.OfType<DynamoGeometryModel3D>().FirstOrDefault();
+            var numberOfColors = dynGeometry.Geometry.Colors.Count;
+            Assert.AreEqual(36, numberOfColors);
+
+            // Expecting they are all the same solid color assigning as a result 
+            //  of DesignScript "Color.ByARGB(255,255,0,255);"
+            Assert.AreEqual(true, dynGeometry.Geometry.Colors.All(color => color.Alpha == 1));
+            Assert.AreEqual(true, dynGeometry.Geometry.Colors.All(color => color.Red == 1));
+            Assert.AreEqual(true, dynGeometry.Geometry.Colors.All(color => color.Green == 0));
+            Assert.AreEqual(true, dynGeometry.Geometry.Colors.All(color => color.Blue == 1));
+        }
+       
+        [Test]
+        public void Display_Geometry_Labels()
+        {
+            OpenVisualizationTest("Labels.dyn");
+            var ws = ViewModel.Model.CurrentWorkspace as HomeWorkspaceModel;
+            
+            RunCurrentModel();
+
+            // This is the node, for which we would display the Labels in the preview geometry. 
+            var codeBlockGUID = "fdec3b9b-56ae-4d01-85c2-47b8425e3130";
+            NodeModel codeBlockNodeModel = ws.Nodes.Where(node => node.GUID.ToString() == codeBlockGUID).FirstOrDefault();
+
+            // The Key to identify the Label's geometry object from Model3DDictionary.
+            var labelKey = codeBlockNodeModel.AstIdentifierForPreview + ":text";
+
+            var helix = ViewModel.BackgroundPreviewViewModel as HelixWatch3DViewModel;
+
+            // By default the DisplayLabels for the code block node is set to false, 
+            // so the Model3DDictionary wouldn't have the geometry object corresponding to the Labels. 
+            var geometryHasLabels = helix.Model3DDictionary.ContainsKey(labelKey); 
+            Assert.IsFalse(geometryHasLabels);
+
+            // We set the DisplayLabels to true to view the Labels in the preview geometry.
+            codeBlockNodeModel.DisplayLabels = true;
+
+            // Now the Labels are shown in the preview geometry. 
+            // The code block node has 64 points, so there should be 64 labels. 
+            var geometryWithLabels = (helix.Model3DDictionary[labelKey] as GeometryModel3D).Geometry as BillboardText3D;
+            Assert.AreEqual(64, geometryWithLabels.TextInfo.Count);
+
+            // Clicking on a single value from the output of the watch node
+            // should show only one label corresponding to that value.  
+            var nodeView = View.ChildrenOfType<NodeView>().First(nv => nv.ViewModel.Name == "Watch");
+            var treeViewItem = nodeView.ChildOfType<TreeViewItem>();
+
+            var indexes = new[] { 0, 0, 1 };
+            foreach (var index in indexes)
+            {
+                treeViewItem = treeViewItem.ChildrenOfType<TreeViewItem>().ElementAt(index);
+            }
+
+            View.Dispatcher.Invoke(() =>
+            {
+                treeViewItem.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                {
+                    RoutedEvent = Mouse.MouseUpEvent
+                });
+            });
+
+            DispatcherUtil.DoEvents();
+
+            // The value selected is x:0, y:0 and z:1, 
+            // so the label that is shown should be [0,0,1].
+            var geometry = (helix.Model3DDictionary[labelKey] as GeometryModel3D).Geometry as BillboardText3D;
+            Assert.AreEqual(1, geometry.TextInfo.Count);
+            Assert.AreEqual("[0,0,1]", geometry.TextInfo[0].Text);
         }
 
         [Test]
         public void Display_BySurfaceColors_HasColoredMesh()
         {
             OpenVisualizationTest("Display.BySurfaceColors.dyn");
-
-            var ws = ViewModel.Model.CurrentWorkspace as HomeWorkspaceModel;
-
             RunCurrentModel();
 
+            Assert.AreEqual(4, BackgroundPreviewGeometry.Count());
             Assert.True(BackgroundPreviewGeometry.HasAnyColorMappedMeshes());
+
+            // These checks are more specific to this test
+            // Expecting 6 color definitions for vertices in the DynamoGeometry
+            var dynGeometry = BackgroundPreviewGeometry.OfType<DynamoGeometryModel3D>().FirstOrDefault();
+            var numberOfColors = dynGeometry.Geometry.Colors.Count;
+            Assert.AreEqual(6, numberOfColors);
+            Assert.AreEqual(52, ((PhongMaterial)dynGeometry.Material).DiffuseMap.Width);
         }
 
         [Test]
@@ -771,7 +878,7 @@ namespace WpfVisualizationTests
             {
                 true, false, true, true
             }));
-            // Ensure that visulations match our expectations
+            // Ensure that visualizations match our expectations
             Assert.AreEqual(2, BackgroundPreviewGeometry.TotalPoints());
 
             // Now turn off the preview of all the nodes
@@ -819,19 +926,25 @@ namespace WpfVisualizationTests
             // 5 points for point0 node, 2 points for point1 and point2 node
             Assert.AreEqual(9, BackgroundPreviewGeometry.TotalPoints());
 
-            // Modify lacing strategy
+            // Modify lacing strategy to Longest
             ViewModel.CurrentSpaceViewModel.SelectAllCommand.Execute(null);
             ViewModel.CurrentSpaceViewModel.SetArgumentLacingCommand.Execute(LacingStrategy.Longest.ToString());
 
             Assert.AreEqual(12, BackgroundPreviewGeometry.TotalPoints());
 
-            // Modify lacing strategy again
+            // Modify lacing strategy to Auto
+            ViewModel.CurrentSpaceViewModel.SelectAllCommand.Execute(null);
+            ViewModel.CurrentSpaceViewModel.SetArgumentLacingCommand.Execute(LacingStrategy.Auto.ToString());
+
+            Assert.AreEqual(9, BackgroundPreviewGeometry.TotalPoints());
+
+            // Modify lacing strategy to CrossProduct
             ViewModel.CurrentSpaceViewModel.SelectAllCommand.Execute(null);
             ViewModel.CurrentSpaceViewModel.SetArgumentLacingCommand.Execute(LacingStrategy.CrossProduct.ToString());
 
             Assert.AreEqual(17, BackgroundPreviewGeometry.TotalPoints());
 
-            // Change lacing back to original state
+            // Change lacing back to Shortest
             ViewModel.CurrentSpaceViewModel.SelectAllCommand.Execute(null);
             ViewModel.CurrentSpaceViewModel.SetArgumentLacingCommand.Execute(LacingStrategy.Shortest.ToString());
             Assert.AreEqual(9, BackgroundPreviewGeometry.TotalPoints());
@@ -926,13 +1039,12 @@ namespace WpfVisualizationTests
             tagGeometryWhenClickingItem(new[] { 0 }, 11, "Watch", 
                 n => n.ViewModel.NodeModel.InPorts[0].Connectors[0].Start.Owner);
         }
-
-        private void tagGeometryWhenClickingItem(int[] indexes, int expectedNumberOfLabels, 
+        
+        private async void tagGeometryWhenClickingItem(int[] indexes, int expectedNumberOfLabels, 
             string nodeName, Func<NodeView,NodeModel> getGeometryOwnerNode, bool expandPreviewBubble = false)
         {
             OpenVisualizationTest("MAGN_3815.dyn");
             RunCurrentModel();
-            DispatcherUtil.DoEvents();
             Assert.AreEqual(3, Model.CurrentWorkspace.Nodes.Count());
             var nodeView = View.ChildrenOfType<NodeView>().First(nv => nv.ViewModel.Name == nodeName);
             Assert.IsNotNull(nodeView, "NodeView has not been found by given name: " + nodeName);

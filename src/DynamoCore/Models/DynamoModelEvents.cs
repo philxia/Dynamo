@@ -283,7 +283,7 @@ namespace Dynamo.Models
 
         internal delegate void TaskDialogHandler(object sender, TaskDialogEventArgs e);
         internal event TaskDialogHandler RequestTaskDialog;
-        internal void OnRequestTaskDialog(object sender, TaskDialogEventArgs args)
+        internal virtual void OnRequestTaskDialog(object sender, TaskDialogEventArgs args)
         {
             if (RequestTaskDialog != null)
                 RequestTaskDialog(sender, args);
@@ -320,7 +320,7 @@ namespace Dynamo.Models
             {
                 Action showFailureMessage = () => DisplayEngineFailureMessage(e.Error);
                 OnRequestDispatcherBeginInvoke(showFailureMessage);
-           }
+            }
 
             if (EvaluationCompleted != null)
                 EvaluationCompleted(sender, e);

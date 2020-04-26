@@ -1,17 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
-using NUnit.Framework;
-using ProtoCore.DSASM.Mirror;
-using ProtoCore.Lang;
-using ProtoTest.TD;
-using ProtoScript.Runners;
-using ProtoTestFx.TD;
 using System.Linq;
+using NUnit.Framework;
 using ProtoCore.AST.AssociativeAST;
 using ProtoCore.DSASM;
 using ProtoCore.Mirror;
-using System.Collections;
+using ProtoScript.Runners;
+using ProtoTestFx.TD;
 
 namespace ProtoTest.LiveRunner
 {
@@ -854,6 +849,93 @@ namespace ProtoTest.LiveRunner
 
             mirror = liveRunner.InspectNodeValue("b");
             Assert.IsTrue(mirror.GetData().IsNull);
+
+        }
+
+        [Test]
+        public void GraphILTest_DeletedBinaryExpresionDoesNotEffectReferences()
+        {
+            //====================================
+            // Create a = true; 
+            // b = true;
+            // c = a & b;
+            // d = a & b;
+            // Execute and verify a = true
+            // b= true
+            // c = true
+            // d = true
+            // Delete c = a&b
+            // 
+            // Execute and verify d = true;
+            //====================================
+
+            // Create a = true; 
+            // b = true;
+            // c = a & b;
+            // d = a & b;
+            BinaryExpressionNode assign1 = new BinaryExpressionNode(
+                new IdentifierNode("a"),
+                new BooleanNode(true),
+            Operator.assign);
+
+            BinaryExpressionNode assign2 = new BinaryExpressionNode(
+                new IdentifierNode("b"),
+                new BooleanNode(true),
+            Operator.assign);
+
+            BinaryExpressionNode assign3 = new BinaryExpressionNode(
+                new IdentifierNode("c"),
+                new BinaryExpressionNode(new IdentifierNode("a"), new IdentifierNode("b")
+                    , Operator.and)
+            ,Operator.assign);
+
+            BinaryExpressionNode assign4 = new BinaryExpressionNode(
+                new IdentifierNode("d"),
+                     new BinaryExpressionNode(new IdentifierNode("a"), new IdentifierNode("b")
+                    , Operator.and)
+            ,Operator.assign);
+
+            List<AssociativeNode> astList = new List<AssociativeNode>() {assign1,assign2,assign3,assign4};
+
+
+
+            Guid guid = System.Guid.NewGuid();
+
+
+            // Instantiate GraphSyncData
+            List<Subtree> addedList = new List<Subtree>();
+            addedList.Add(new Subtree(astList,guid));
+
+            GraphSyncData syncData = new GraphSyncData(null, addedList, null);
+
+            // emit the DS code from the AST tree
+            liveRunner = new ProtoScript.Runners.LiveRunner();
+            liveRunner.UpdateGraph(syncData);
+
+            // Execute and verify c = true
+            // Execute and verify d = true
+            RuntimeMirror mirrorc = liveRunner.InspectNodeValue("c");
+            Assert.IsTrue((bool)mirrorc.GetData().Data == true);
+            RuntimeMirror mirrord = liveRunner.InspectNodeValue("d");
+            Assert.IsTrue((bool)mirrord.GetData().Data == true);
+
+
+
+            // Delete c = a&b
+            var deleteGuid = Guid.NewGuid();
+            var deletedsb = new Subtree(new List<AssociativeNode> { assign3 }, deleteGuid);
+            List<Subtree> deletedList = new List<Subtree>();
+            deletedList.Add(deletedsb);
+            syncData = new GraphSyncData(deletedList, null, null);
+            liveRunner.UpdateGraph(syncData);
+
+            // Execute and verify c = true
+            // Execute and verify d = true
+            RuntimeMirror mirrorc2 = liveRunner.InspectNodeValue("c");
+            Assert.IsTrue(mirrorc2.GetData().Data == null);
+            RuntimeMirror mirrord2 = liveRunner.InspectNodeValue("d");
+            Assert.IsTrue((bool)mirrord2.GetData().Data == true);
+
 
         }
 

@@ -14,7 +14,7 @@ namespace DynamoShapeManager
         /// <summary>
         /// Key words for Products containing ASM binaries
         /// </summary>
-        private static readonly List<string> ProductsWithASM = new List<string>() { "Revit", "Civil", "FormIt" };
+        private static readonly List<string> ProductsWithASM = new List<string>() { "Revit", "Civil", "Robot Structural Analysis", "FormIt" };
 
         #region public properties
         public static readonly string GeometryFactoryAssembly = "LibG.ProtoInterface.dll";
@@ -29,7 +29,7 @@ namespace DynamoShapeManager
         /// <summary>
         /// The mask to filter ASM binary
         /// </summary>
-        public static readonly string ASMFileMask = "ASMAHL*.dll";
+        public static readonly string ASMFileMask = "ASMAHL*A.dll";
         #endregion
 
 
@@ -146,6 +146,7 @@ namespace DynamoShapeManager
                 // this is used for testing
                 getASMInstallsFunc = getASMInstallsFunc ?? GetAsmInstallations;
                 var installations = getASMInstallsFunc(rootFolder);
+
 
                 // first find the exact match or the lowest matching within same major version
                 foreach (var version in versions)
@@ -286,11 +287,11 @@ namespace DynamoShapeManager
 
             if (string.IsNullOrEmpty(preloaderLocationToLoad))
             {
-                throw new ArgumentException("Invalid LibG preloader location for ASM at " + asmLocation);
+                throw new ArgumentException($"Invalid LibG preloader location {preloaderLocation} for ASM at {asmLocation}");
             }
             if (string.IsNullOrEmpty(asmLocation) || !Directory.Exists(asmLocation))
             {
-                throw new ArgumentException("Invalid ASM location " + asmLocation);
+                throw new ArgumentException($"Invalid ASM location { asmLocation }");
             }
             var preloaderPath = Path.Combine(preloaderLocationToLoad, PreloaderAssembly);
 
@@ -308,10 +309,18 @@ namespace DynamoShapeManager
                 throw new MissingMethodException(
                     string.Format("Method '{0}' not found", PreloaderMethodName));
             }
-
-            var methodParams = new object[] { asmLocation };
-            preloadMethod.Invoke(null, methodParams);
-
+            try
+            {
+                var methodParams = new object[] { asmLocation };
+                preloadMethod.Invoke(null, methodParams);
+            }
+            catch
+            {
+                //log for clients like CLI.
+                var message = $"Could not load geometry library binaries from : {asmLocation}";
+                Console.WriteLine(message);
+                throw new Exception(message);
+            }
             Debug.WriteLine("Successfully loaded ASM binaries");
         }
 
@@ -346,17 +355,18 @@ namespace DynamoShapeManager
         }
 
         /// <summary>
-        /// Call this method to resolve full path to GeometryFactoryAssembly 
-        /// assembly, given the root folder and the version. This method throws 
-        /// an exception if either of the folders/assembly cannot be found.
+        /// This method will return the path to the GeometryFactory assembly location 
+        /// for a requested version of the geometry library.
+        /// This method is tolerant to the requested version in that it will attempt to 
+        /// locate an exact or lower version of the GeometryFactory assembly.
         /// </summary>
         /// <param name="rootFolder">Full path of the directory that contains 
-        /// LibG_xxx folder, where 'xxx' represents the library version. In a 
+        /// LibG_xxx_y_z folder, where 'xxx y z' represents the library version of asm. In a 
         /// typical setup this would be the same directory that contains Dynamo 
-        /// core modules. This must represent a valid directory.</param>
+        /// core modules. This must represent a valid directory - it cannot be null.</param>
         /// <param name="version">Version number of the targeted geometry library.
-        /// If the resulting folder does not exist, this method throws an 
-        /// FileNotFoundException.</param>
+        /// If the resulting assembly does not exist, this method will look for a lower version match.
+        /// This parameter cannot be null. </param>
         /// <returns>The full path to GeometryFactoryAssembly assembly.</returns>
         /// 
         [Obsolete("Please use GetGeometryFactoryPath2(string rootFolder, Version version).")]
@@ -366,17 +376,18 @@ namespace DynamoShapeManager
         }
 
         /// <summary>
-        /// Call this method to resolve full path to GeometryFactoryAssembly 
-        /// assembly, given the root folder and the version. This method throws 
-        /// an exception if either of the folders/assembly cannot be found.
+        /// This method will return the path to the GeometryFactory assembly location 
+        /// for a requested version of the geometry library.
+        /// This method is tolerant to the requested version in that it will attempt to 
+        /// locate an exact or lower version of the GeometryFactory assembly.
         /// </summary>
         /// <param name="rootFolder">Full path of the directory that contains 
         /// LibG_xxx_y_z folder, where 'xxx y z' represents the library version of asm. In a 
         /// typical setup this would be the same directory that contains Dynamo 
-        /// core modules. This must represent a valid directory.</param>
+        /// core modules. This must represent a valid directory - it cannot be null.</param>
         /// <param name="version">Version number of the targeted geometry library.
-        /// If the resulting folder does not exist, this method throws an 
-        /// FileNotFoundException.</param>
+        /// If the resulting assembly does not exist, this method will look for a lower version match.
+        /// This parameter cannot be null. </param>
         /// <returns>The full path to GeometryFactoryAssembly assembly.</returns>
         /// 
         public static string GetGeometryFactoryPath2(string rootFolder, Version version)
@@ -392,8 +403,14 @@ namespace DynamoShapeManager
             }
             //IMPORTANT_ Going forward libg folders will be named as follows: libg_major_minor_build - in reference to ASM.
 
-            var libGFolderName = string.Format("libg_{0}_{1}_{2}", version.Major, version.Minor, version.Build);
-            var libGFolder = Path.Combine(rootFolder, libGFolderName);
+            if (version == null)
+            {
+                throw new ArgumentNullException("version");
+            }
+
+            //lookup libG with a fallback to older versions which share the major version number.
+            var libGFolder = Utilities.GetLibGPreloaderLocation(version, rootFolder);
+
             if (!Directory.Exists(libGFolder))
             {
                 // LibG_version folder must be valid.
@@ -433,7 +450,41 @@ namespace DynamoShapeManager
 
 
             var methodParams = new object[] { ProductsWithASM, ASMFileMask };
-            return installationsMethod.Invoke(null, methodParams) as IEnumerable;
+            var installs = installationsMethod.Invoke(null, methodParams) as IEnumerable;
+
+            //filter install locations missing tbb and tbbmalloc.dll
+            return installs.Cast<KeyValuePair<string, Tuple<int, int, int, int>>>().Where(install =>
+            {
+                var files = Directory.EnumerateFiles(install.Key, "tbb*.dll").Select(x=>System.IO.Path.GetFileName(x));
+                if (files.Contains("tbb.dll") && files.Contains("tbbmalloc.dll"))
+                {
+                    return true;
+                }
+                return false;
+
+            });
+        }
+
+
+
+        /// <summary>
+        /// Extracts version of ASM dlls from a path by scanning for ASM dlls in the path.
+        /// Throws if ASM binaries cannot be found in the path.
+        /// </summary>
+        /// <param name="asmPath">path to directory containing asm dlls</param>
+        /// <returns></returns>
+        /// <param name="searchPattern">optional - to be used for testing - default is the ASM search pattern</param>
+        /// <returns></returns>
+        public static Version GetVersionFromPath(string asmPath, string searchPattern = "ASMAHL*.dll")
+        {
+            var ASMFilePath = Directory.GetFiles(asmPath, searchPattern, SearchOption.TopDirectoryOnly).FirstOrDefault();
+            if (ASMFilePath != null && File.Exists(ASMFilePath))
+            {
+                var asmVersion = FileVersionInfo.GetVersionInfo(ASMFilePath);
+                var libGversion = new Version(asmVersion.FileMajorPart, asmVersion.FileMinorPart, asmVersion.FileBuildPart);
+                return libGversion;
+            }
+            throw new FileNotFoundException($"Could not find geometry library binaries at : {asmPath}");
         }
     }
 }

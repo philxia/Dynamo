@@ -1,4 +1,10 @@
-﻿using CoreNodeModels.Input;
+﻿using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Windows;
+using System.Windows.Input;
+using CoreNodeModels.Input;
 using Dynamo.Configuration;
 using Dynamo.Controls;
 using Dynamo.Graph.Connectors;
@@ -9,17 +15,12 @@ using Dynamo.Models;
 using Dynamo.Scheduler;
 using Dynamo.Selection;
 using Dynamo.Services;
+using Dynamo.UI.Prompts;
 using Dynamo.Utilities;
 using Dynamo.ViewModels;
 using Dynamo.Views;
 using DynamoCoreWpfTests.Utility;
 using NUnit.Framework;
-using System;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Windows;
-using System.Windows.Input;
 using SystemTestServices;
 
 namespace DynamoCoreWpfTests
@@ -468,6 +469,62 @@ namespace DynamoCoreWpfTests
             #endregion
         }
 
+        [Test, RequiresSTA]
+        [Category("DynamoUI")]
+        public void PreferenceSetting_RenderPrecision()
+        {
+            // Test that RenderPrecision setting works as expected
+            ViewModel.RenderPackageFactoryViewModel.MaxTessellationDivisions = 256;
+            Assert.AreEqual(256, ViewModel.Model.PreferenceSettings.RenderPrecision);
+
+            ViewModel.RenderPackageFactoryViewModel.MaxTessellationDivisions = 128;
+            Assert.AreEqual(128, ViewModel.Model.PreferenceSettings.RenderPrecision);
+
+            // Test serialization of RenderPrecision 
+            string tempPath = System.IO.Path.GetTempPath();
+            tempPath = Path.Combine(tempPath, "userPreference.xml");
+            
+            PreferenceSettings initalSetting = new PreferenceSettings();
+            PreferenceSettings resultSetting;
+
+            initalSetting.RenderPrecision = 256;
+
+            initalSetting.Save(tempPath);
+            resultSetting = PreferenceSettings.Load(tempPath);
+
+            Assert.AreEqual(resultSetting.RenderPrecision, initalSetting.RenderPrecision);
+
+            // Test loading old settings file without render precision attribute
+            var filePath = Path.Combine(GetTestDirectory(ExecutingDirectory), @"settings\DynamoSettings-WithoutRenderPrecision.xml");
+            PreferenceSettings WithoutRenderPrecision = PreferenceSettings.Load(filePath);
+            Assert.AreEqual(WithoutRenderPrecision.RenderPrecision, 128);
+        }
+
+        [Test]
+        [Category("DynamoUI")]
+        public void PreferenceSetting_NotAgreeAnalyticsSharing()
+        {
+            // Test deserialization of analytics setting 
+            // Test loading old settings file without agreement 
+            var filePath = Path.Combine(GetTestDirectory(ExecutingDirectory), @"settings\DynamoSettings-firstrun.xml");
+            var resultSetting = PreferenceSettings.Load(filePath);
+            Assert.AreEqual(false, resultSetting.IsAnalyticsReportingApproved);
+            Assert.AreEqual(false, resultSetting.IsUsageReportingApproved);
+            Assert.DoesNotThrow(() => Dynamo.Logging.AnalyticsService.ShutDown());
+        }
+
+        [Test]
+        [Category("DynamoUI")]
+        public void PreferenceSetting_AgreeAnalyticsSharing()
+        {
+            // Test loading old settings file with agreement 
+            var filePath = Path.Combine(GetTestDirectory(ExecutingDirectory), @"settings\DynamoSettings-AnalyticsTurnedOn.xml");
+            var resultSetting = PreferenceSettings.Load(filePath);
+            Assert.AreEqual(true, resultSetting.IsAnalyticsReportingApproved);
+            Assert.AreEqual(true, resultSetting.IsUsageReportingApproved);
+            Assert.DoesNotThrow(() => Dynamo.Logging.AnalyticsService.ShutDown());
+        }
+
         #region PreferenceSettings
         [Test, RequiresSTA]
         [Category("DynamoUI")]
@@ -517,10 +574,12 @@ namespace DynamoCoreWpfTests
                 // First time run, check if dynamo did set it back to false after running
                 Assert.AreEqual(false, UsageReportingManager.Instance.FirstRun);
 
-                // CollectionInfoOption To TRUE
+                // CollectionInfoOption To FALSE
                 UsageReportingManager.Instance.SetUsageReportingAgreement(true);
                 RestartTestSetup(startInTestMode: false);
-                Assert.AreEqual(true, UsageReportingManager.Instance.IsUsageReportingApproved);
+                // Because IsUsageReportingApproved is now dominated by IsAnalyticsReportingApproved.
+                // In this case. the value is still false because of IsAnalyticsReportingApproved
+                Assert.AreEqual(false, UsageReportingManager.Instance.IsUsageReportingApproved);
 
                 // CollectionInfoOption To FALSE
                 UsageReportingManager.Instance.SetUsageReportingAgreement(false);
@@ -664,6 +723,7 @@ namespace DynamoCoreWpfTests
                 Assert.AreEqual(content, infoBubble.Content);
                 Assert.AreEqual(InfoBubbleViewModel.Style.Error, infoBubble.InfoBubbleStyle);
                 Assert.AreEqual(InfoBubbleViewModel.Direction.Bottom, infoBubble.ConnectingDirection);
+                Assert.IsNull(infoBubble.DocumentationLink);
             }
         }
 

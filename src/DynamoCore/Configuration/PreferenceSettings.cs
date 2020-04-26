@@ -15,7 +15,7 @@ namespace Dynamo.Configuration
     /// from a XML file from DYNAMO_SETTINGS_FILE.
     /// When GUI is closed, the settings are saved back into the XML file.
     /// </summary>
-    public class PreferenceSettings : NotificationObject, IPreferences
+    public class PreferenceSettings : NotificationObject, IPreferences, IRenderPrecisionPreference
     {
         private string numberFormat;
         private string lastUpdateDownloadPath;
@@ -26,6 +26,11 @@ namespace Dynamo.Configuration
         /// Indicates the maximum number of files shown in Recent Files
         /// </summary>
         internal const int DefaultMaxNumRecentFiles = 10;
+
+        /// <summary>
+        /// Indicates the default render precision, i.e. the maximum number of tessellation divisions
+        /// </summary>
+        internal const int DefaultRenderPrecision = 128;
 
         /// <summary>
         /// Temp PreferenceSetting Location for testing
@@ -79,6 +84,11 @@ namespace Dynamo.Configuration
         /// Indicates if preview bubbles should be displayed on nodes.
         /// </summary>
         public bool ShowPreviewBubbles { get; set; }
+
+        /// <summary>
+        /// Indicates if code block node line numbers should  be displayed.
+        /// </summary>
+        public bool ShowCodeBlockLineNumber { get; set; }
 
         /// <summary>
         /// Should connectors be visible?
@@ -154,7 +164,11 @@ namespace Dynamo.Configuration
         }
 
         /// <summary>
-        /// Indicates whether surface and solid edges will 
+        /// Indicate which render precision will be used
+        /// </summary>
+        public int RenderPrecision { get; set; }
+
+        /// Indicates whether surface and solid edges will
         /// be rendered.
         /// </summary>
         public bool ShowEdges { get; set; }
@@ -313,9 +327,11 @@ namespace Dynamo.Configuration
             // Default Settings
             IsFirstRun = true;
             IsUsageReportingApproved = false;
+            IsAnalyticsReportingApproved = true;
             LibraryWidth = 304;
             ConsoleHeight = 0;
             ShowPreviewBubbles = true;
+            ShowCodeBlockLineNumber = true;
             ShowConnector = true;
             ConnectorType = ConnectorType.BEZIER;
             IsBackgroundGridVisible = true;
@@ -324,6 +340,7 @@ namespace Dynamo.Configuration
             UseHardwareAcceleration = true;
             PackageDownloadTouAccepted = false;
             maxNumRecentFiles = DefaultMaxNumRecentFiles;
+            RenderPrecision = DefaultRenderPrecision;
             ShowEdges = false;
             OpenFileInManualExecutionMode = false;
             ShowDetailedLayout = true;

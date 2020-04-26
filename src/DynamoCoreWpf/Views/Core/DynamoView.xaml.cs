@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -48,11 +49,12 @@ using String = System.String;
 namespace Dynamo.Controls
 {
     /// <summary>
-    ///     Interaction logic for DynamoForm.xaml
+    ///     Interaction logic for DynamoView.xaml
     /// </summary>
     public partial class DynamoView : Window, IDisposable
     {
         public const string BackgroundPreviewName = "BackgroundPreview";
+
         private const int navigationInterval = 100;
         // This is used to determine whether ESC key is being held down
         private bool IsEscKeyPressed = false;
@@ -64,18 +66,25 @@ namespace Dynamo.Controls
         private int tabSlidingWindowStart, tabSlidingWindowEnd;
         private GalleryView galleryView;
         private readonly LoginService loginService;
-        internal ViewExtensionManager viewExtensionManager = new ViewExtensionManager();
         private ShortcutToolbar shortcutBar;
         private bool loaded = false;
-
         // This is to identify whether the PerformShutdownSequenceOnViewModel() method has been
         // called on the view model and the process is not cancelled
         private bool isPSSCalledOnViewModelNoCancel = false;
-
         private readonly DispatcherTimer _workspaceResizeTimer = new DispatcherTimer { Interval = new TimeSpan(0, 0, 0, 0, 500), IsEnabled = false };
 
+        /// <summary>
+        /// This event is raised on the dynamo view when an extension tab is closed.
+        /// </summary>
+        internal static event Action<String> CloseExtension;
+        internal ObservableCollection<TabItem> ExtensionTabItems { set; get; } = new ObservableCollection<TabItem>();
+        internal ViewExtensionManager viewExtensionManager;
         internal Watch3DView BackgroundPreview { get; private set; }
 
+        /// <summary>
+        /// Constructor
+        /// </summary>
+        /// <param name="dynamoViewModel">Dynamo view model</param>
         public DynamoView(DynamoViewModel dynamoViewModel)
         {
             // The user's choice to enable hardware acceleration is now saved in
@@ -95,14 +104,13 @@ namespace Dynamo.Controls
 
             tabSlidingWindowStart = tabSlidingWindowEnd = 0;
 
+            //Initialize the ViewExtensionManager with the CommonDataDirectory so that view extensions found here are checked first for dll's with signed certificates
+            viewExtensionManager = new ViewExtensionManager(new[] {dynamoViewModel.Model.PathManager.CommonDataDirectory });
+
             _timer = new Stopwatch();
             _timer.Start();
 
             InitializeComponent();
-
-            ToggleIsUsageReportingApprovedCommand.ToolTip = string.Format(
-                Wpf.Properties.Resources.DynamoViewSettingMenuEnableDataReportingTooltip,
-                dynamoViewModel.BrandingResourceProvider.ProductName);
 
             Loaded += DynamoView_Loaded;
             Unloaded += DynamoView_Unloaded;
@@ -186,9 +194,137 @@ namespace Dynamo.Controls
                  }
              };
 
+            // Add an event handler to check if the collection is modified.   
+            ExtensionTabItems.CollectionChanged += this.OnCollectionChanged;
+
+            this.HideOrShowRightSideBar();
+
             this.dynamoViewModel.RequestPaste += OnRequestPaste;
             this.dynamoViewModel.RequestReturnFocusToView += OnRequestReturnFocusToView;
             FocusableGrid.InputBindings.Clear();
+        }
+
+        // This method adds a tab item to the right side bar and 
+        // sets the extension window as the tab content.
+        internal TabItem AddExtensionTabItem(IViewExtension viewExtension, ContentControl contentControl)
+        {
+            int count = ExtensionTabItems.Count;
+
+            if (!IsExtensionAddedToRightSideBar(viewExtension))
+            {
+                tabDynamic.DataContext = null;
+
+                // creates a new tab item
+                TabItem tab = new TabItem();
+                tab.Header = viewExtension.Name;
+                tab.Tag = viewExtension.GetType();
+                tab.Uid = viewExtension.UniqueId;
+                tab.HeaderTemplate = tabDynamic.FindResource("TabHeader") as DataTemplate;
+
+                // setting the extension UI to the current tab content 
+                // based on whether it is a UserControl element or window element. 
+                if (contentControl is UserControl)
+                {
+                    tab.Content = contentControl;
+                }
+                else
+                {
+                    tab.Content = contentControl.Content;
+                    var extensionWindow = contentControl as Window;
+                    if (extensionWindow != null)
+                    {
+                        // Make sure the extension window closes with Dynamo
+                        extensionWindow.Owner = this;
+                    }
+                }
+
+                //Insert the tab at the end
+                ExtensionTabItems.Insert(count, tab);
+
+                tabDynamic.DataContext = ExtensionTabItems;
+                tabDynamic.SelectedItem = tab;
+
+                return tab;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// This method will close a tab item in the right side bar based on passed extension
+        /// </summary>
+        /// <param name="viewExtension">Extension to be closed</param>
+        /// <returns></returns>
+        internal void CloseExtensionTabItem(IViewExtension viewExtension)
+        {
+            string tabName = viewExtension.Name;
+            TabItem tabitem = ExtensionTabItems.OfType<TabItem>().SingleOrDefault(n => n.Header.ToString() == tabName);
+            CloseExtension?.Invoke(tabName);
+            CloseExtensionTab(tabitem);
+        }
+ 
+        /// <summary>
+        /// Event handler for the CloseButton.
+        /// This method triggers the close operation on the selected tab.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        internal void CloseExtensionTab(object sender, RoutedEventArgs e)
+        {
+            string tabName = (sender as Button).DataContext.ToString();
+
+            CloseExtension?.Invoke(tabName);
+
+            TabItem tabitem = ExtensionTabItems.OfType<TabItem>().SingleOrDefault(n => n.Header.ToString() == tabName);
+            CloseExtensionTab(tabitem);
+        }
+
+        /// <summary>
+        /// Close extension tab by extension tab item
+        /// </summary>
+        /// <param name="tabitem">target tab item</param>
+        private void CloseExtensionTab(TabItem tabitem)
+        {
+            TabItem tabToBeRemoved = tabitem;
+
+            // get the selected tab
+            TabItem selectedTab = tabDynamic.SelectedItem as TabItem;
+
+            if (tabToBeRemoved != null)
+            {
+                // clear tab control binding and bind to the new tab-list. 
+                tabDynamic.DataContext = null;
+                ExtensionTabItems.Remove(tabToBeRemoved);
+                ExtensionTabItems = ExtensionTabItems;
+                tabDynamic.DataContext = ExtensionTabItems;
+
+                // Highlight previously selected tab. if that is removed then Highlight the first tab
+                if (selectedTab.Equals(tabToBeRemoved))
+                {
+                    if (ExtensionTabItems.Count > 0)
+                    {
+                        selectedTab = ExtensionTabItems[0];
+                    }
+                }
+                tabDynamic.SelectedItem = selectedTab;
+            }
+        }
+
+        // This event is triggered when the tabitems list is changed and will show/hide the right side bar accordingly.
+        private void OnCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            this.HideOrShowRightSideBar();
+        }
+
+        private Boolean IsExtensionAddedToRightSideBar(IViewExtension viewExtension)
+        {
+            foreach (TabItem tabItem in ExtensionTabItems)
+            {
+                if (tabItem.Tag.Equals(viewExtension.GetType()))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void OnRequestReturnFocusToView()
@@ -523,8 +659,12 @@ namespace Dynamo.Controls
 
             //Backing up IsFirstRun to determine whether to show Gallery
             var isFirstRun = dynamoViewModel.Model.PreferenceSettings.IsFirstRun;
-            // If first run, Collect Info Prompt will appear
-            UsageReportingManager.Instance.CheckIsFirstRun(this, dynamoViewModel.BrandingResourceProvider);
+
+            if (!dynamoViewModel.HideReportOptions)
+            {
+                // If first run, Collect Info Prompt will appear
+                UsageReportingManager.Instance.CheckIsFirstRun(this, dynamoViewModel.BrandingResourceProvider);
+            }
 
             WorkspaceTabs.SelectedIndex = 0;
             dynamoViewModel = (DataContext as DynamoViewModel);
@@ -701,6 +841,7 @@ namespace Dynamo.Controls
 
                 if (galleryView.ViewModel.HasContents)
                 {
+                    galleryBackground.Children.Clear();
                     galleryBackground.Children.Add(galleryView);
                     galleryBackground.Visibility = Visibility.Visible;
                     galleryView.Focus(); //get keyboard focus
@@ -1630,7 +1771,7 @@ namespace Dynamo.Controls
             Image collapseIcon = (Image)sp.Children[1];
 
             // When hovered swap appropriate expand/collapse button state
-            if (LibraryCollapsed)
+            if (LibraryCollapsed || ExtensionsCollapsed)
             {
                 Uri imageUri;
                 imageUri = new Uri(@"pack://application:,,,/DynamoCoreWpf;component/UI/Images/expand_hover.png");
@@ -1640,17 +1781,20 @@ namespace Dynamo.Controls
         }
 
         private bool libraryCollapsed;
+        private bool extensionsCollapsed;
 
-        // Default library width
-        private const int defaultLibraryWidth = 200;
+        // Default side bar width
+        private const int defaultSideBarWidth = 200;
 
-        // Check if library is collapsed or expanded
+        /// <summary>
+        /// Check if library is collapsed or expanded
+        /// </summary>
         public bool LibraryCollapsed
         {
             get
             {
                 // Threshold that determines if button should be displayed
-                if (LibraryViewColumn.Width.Value < 20)
+                if (LeftExtensionsViewColumn.Width.Value < 20)
                 { libraryCollapsed = true; }
 
                 else
@@ -1660,33 +1804,81 @@ namespace Dynamo.Controls
             }
         }
 
+        /// <summary>
+        /// Check if extensions right side bar is collapsed or expanded
+        /// </summary>
+        public bool ExtensionsCollapsed
+        {
+            get
+            {
+                // Threshold that determines if button should be displayed
+                if (RightExtensionsViewColumn.Width.Value < 20)
+                { extensionsCollapsed = true; }
+
+                else
+                { extensionsCollapsed = false; }
+
+                return extensionsCollapsed;
+            }
+        }
+
         // Check if library is collapsed or expanded and apply appropriate button state
         private void updateCollapseIcon()
         {
             if (LibraryCollapsed)
             {
-                collapsedSidebar.Visibility = Visibility.Visible;
+                collapsedLibrarySidebar.Visibility = Visibility.Visible;
             }
-
             else
             {
-                collapsedSidebar.Visibility = Visibility.Collapsed;
+                collapsedLibrarySidebar.Visibility = Visibility.Collapsed;
+            }
+
+        }
+
+        // Show the extensions right side bar when there is atleast one extension
+        private void HideOrShowRightSideBar()
+        {
+            if (ExtensionTabItems.Count < 1)
+            {
+                RightExtensionsViewColumn.Width = new GridLength(0, GridUnitType.Star);
+                collapsedExtensionSidebar.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                RightExtensionsViewColumn.Width = new GridLength(defaultSideBarWidth, GridUnitType.Star);
+                collapsedExtensionSidebar.Visibility = Visibility.Visible;
             }
         }
 
-        private void OnCollapsedSidebarClick(object sender, EventArgs e)
+        private void OnCollapsedLeftSidebarClick(object sender, EventArgs e)
         {
             if (LibraryCollapsed)
             {
-                // Restore library to default width (200)
-                LibraryViewColumn.Width = new GridLength(defaultLibraryWidth, GridUnitType.Star);
+                // Restore extension view to default width (200)
+                LeftExtensionsViewColumn.Width = new GridLength(defaultSideBarWidth, GridUnitType.Star);
             }
-
             else
             {
-                LibraryViewColumn.Width = new GridLength(0, GridUnitType.Star);
+                LeftExtensionsViewColumn.Width = new GridLength(0, GridUnitType.Star);
             }
 
+            updateCollapseIcon();
+        }
+
+        private void OnCollapsedRightSidebarClick(object sender, EventArgs e)
+        {
+            if (ExtensionsCollapsed)
+            {
+                // Restore right extension grid to default width (200)
+                RightExtensionsViewColumn.Width = new GridLength(defaultSideBarWidth, GridUnitType.Star);
+            }
+            else
+            {
+                RightExtensionsViewColumn.Width = new GridLength(0, GridUnitType.Star);
+            }
+
+            // TODO: Maynot need this depending on tab design
             updateCollapseIcon();
         }
 
@@ -1712,7 +1904,7 @@ namespace Dynamo.Controls
         private void LibraryClicked(object sender, EventArgs e)
         {
             restoreWidth = sidebarGrid.ActualWidth;
-            LibraryViewColumn.MinWidth = 0;
+            LeftExtensionsViewColumn.MinWidth = 0;
 
             mainGrid.ColumnDefinitions[0].Width = new GridLength(0.0);
             verticalSplitter.Visibility = Visibility.Collapsed;
@@ -1723,7 +1915,24 @@ namespace Dynamo.Controls
             view.Visibility = Visibility.Collapsed;
 
             sidebarGrid.Visibility = Visibility.Collapsed;
-            collapsedSidebar.Visibility = Visibility.Visible;
+            collapsedLibrarySidebar.Visibility = Visibility.Visible;
+        }
+
+        private void ExtensionsButtonClicked(object sender, EventArgs e)
+        {
+            restoreWidth = sidebarExtensionsGrid.ActualWidth;
+            RightExtensionsViewColumn.MinWidth = 0;
+
+            mainGrid.ColumnDefinitions[0].Width = new GridLength(0.0);
+            extensionSplitter.Visibility = Visibility.Collapsed;
+            sidebarExtensionsGrid.Visibility = Visibility.Collapsed;
+
+            horizontalSplitter.Width = double.NaN;
+            UserControl view = (UserControl)sidebarExtensionsGrid.Children[0];
+            view.Visibility = Visibility.Collapsed;
+
+            sidebarExtensionsGrid.Visibility = Visibility.Collapsed;
+            collapsedExtensionSidebar.Visibility = Visibility.Visible;
         }
 
         private void OnSettingsSubMenuOpened(object sender, RoutedEventArgs e)
@@ -1839,6 +2048,9 @@ namespace Dynamo.Controls
             {
                 dynamoViewModel.Model.AuthenticationManager.AuthProvider.RequestLogin -= loginService.ShowLogin;
             }
+
+            // Removing the tab items list handler
+            ExtensionTabItems.CollectionChanged -= this.OnCollectionChanged;
         }
     }
 }

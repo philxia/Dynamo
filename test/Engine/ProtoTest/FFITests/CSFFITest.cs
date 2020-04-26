@@ -1,11 +1,9 @@
 
 using System;
 using System.Collections.Generic;
-using FFITarget;
 using NUnit.Framework;
 using ProtoCore.DSASM.Mirror;
 using ProtoFFI;
-using ProtoTest.TD;
 using ProtoTestFx.TD;
 namespace ProtoFFITests
 {
@@ -1313,7 +1311,7 @@ a12;
             thisTest.Verify("bReadback", null);
 
             TestFrameWork.VerifyBuildWarning(ProtoCore.BuildData.WarningID.MultipleSymbolFound);
-            string[] classes = thisTest.GetAllMatchingClasses("DupTargetTest");
+            string[] classes = thisTest.GetAllMatchingClasses("B.DupTargetTest");
             Assert.True(classes.Length > 1, "More than one implementation of DupTargetTest class expected");
         }
 
@@ -1339,7 +1337,7 @@ a12;
             thisTest.Verify("cReadback", 2);
 
             TestFrameWork.VerifyBuildWarning(ProtoCore.BuildData.WarningID.MultipleSymbolFound);
-            string[] classes = thisTest.GetAllMatchingClasses("DupTargetTest");
+            string[] classes = thisTest.GetAllMatchingClasses("B.DupTargetTest");
             Assert.True(classes.Length > 1, "More than one implementation of DupTargetTest class expected");
         }
 
@@ -1386,6 +1384,32 @@ value = [u.X, u.Y, u.Z];
             ExecutionMirror mirror = thisTest.RunScriptSource(code);
             thisTest.Verify("value", new double[] { 1, 2, 3 });
             thisTest.Verify("newPoint", FFITarget.DummyPoint.ByCoordinates(2, 4, 6));
+        }
+
+        [Test]
+        public void AllowRankReductionAttributeWorksForProperty()
+        {
+            string code =
+                @"import(""FFITarget.dll"");
+rankReduceTestObject = FFITarget.TestRankReduce(""test"");
+property = rankReduceTestObject.Property; 
+reducedProperty = rankReduceTestObject.RankReduceProperty; ";
+            thisTest.RunScriptSource(code);
+            thisTest.Verify("property", new List<string> { "test" });
+            thisTest.Verify("reducedProperty", "test");
+        }
+
+        [Test]
+        public void AllowRankReductionAttributeWorksForMethod()
+        {
+            string code =
+                @"import(""FFITarget.dll"");
+rankReduceTestObject = FFITarget.TestRankReduce(""test"");
+method = rankReduceTestObject.Method(); 
+reducedMethod = rankReduceTestObject.RankReduceMethod(); ";
+            thisTest.RunScriptSource(code);
+            thisTest.Verify("method", new List<string> { "test" });
+            thisTest.Verify("reducedMethod", "test");
         }
     }
 }

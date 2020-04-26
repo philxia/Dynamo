@@ -1,12 +1,9 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using Autodesk.DesignScript.Runtime;
-using Dynamo.Graph.Nodes;
-using Dynamo.Models;
 using System.Text.RegularExpressions;
+using Dynamo.Graph.Nodes;
 
 namespace DSCore
 {
@@ -118,6 +115,17 @@ namespace DSCore
         public static string ToLower(string str)
         {
             return str.ToLower();
+        }
+
+        /// <summary>
+        ///     Converts the given string to title case.
+        /// </summary>
+        /// <param name="str">String to be made title case.</param>
+        /// <returns name="str">Title case string.</returns>
+        /// <search>2titlecase,to titlecase,to title case,totitlecase,titlecase</search>
+        public static string ToTitle(string str)
+        {
+            return CultureInfo.CurrentCulture.TextInfo.ToTitleCase(str);
         }
 
         /// <summary>

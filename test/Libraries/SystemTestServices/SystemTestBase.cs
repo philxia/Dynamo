@@ -7,7 +7,7 @@ using System.Threading;
 
 using Dynamo.Configuration;
 using Dynamo.Controls;
-using Dynamo.Graph;
+using Dynamo.Extensions;
 using Dynamo.Graph.Nodes;
 using Dynamo.Graph.Workspaces;
 using Dynamo.Interfaces;
@@ -16,6 +16,7 @@ using Dynamo.Scheduler;
 using Dynamo.Tests;
 using Dynamo.Updates;
 using Dynamo.ViewModels;
+using Dynamo.Wpf.Extensions;
 using DynamoShapeManager;
 
 using NUnit.Framework;
@@ -382,6 +383,17 @@ namespace SystemTestServices
             Assert.IsNotNull(mirror);
             var classInfo = mirror.GetData().Class;
             Assert.AreEqual(classInfo.ClassName, className);
+        }
+
+        /// <summary>
+        /// Get loaded instance(s) of a view extension type.
+        /// Returns null if no view extensions of the provided type are loaded
+        /// </summary>
+        /// <typeparam name="T">A type which implements IViewExtension</typeparam>
+        /// <returns></returns>
+        public IEnumerable<T> GetViewExtensionsByType<T>()
+        {
+            return View.viewExtensionManager.ViewExtensions.OfType<T>();
         }
 
         #endregion

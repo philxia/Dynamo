@@ -3,13 +3,15 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Dynamo.Core;
+using Dynamo.Engine;
+using Dynamo.Exceptions;
+using Dynamo.Extensions;
 using Dynamo.Interfaces;
 using Dynamo.Logging;
 using Dynamo.Utilities;
 using DynamoPackages.Properties;
 using DynamoUtilities;
-using Dynamo.Core;
-using Dynamo.Extensions;
 
 namespace Dynamo.PackageManager
 {
@@ -29,7 +31,8 @@ namespace Dynamo.PackageManager
     public class PackageLoader : LogSourceBase
     {
         internal event Action<Assembly> RequestLoadNodeLibrary;
-        internal event Func<string, IEnumerable<CustomNodeInfo>> RequestLoadCustomNodeDirectory;
+        internal event Action<IEnumerable<Assembly>> PackagesLoaded;
+        internal event Func<string, Graph.Workspaces.PackageInfo, IEnumerable<CustomNodeInfo>> RequestLoadCustomNodeDirectory;
         internal event Func<string, IExtension> RequestLoadExtension;
         internal event Action<IExtension> RequestAddExtension;
 
@@ -43,6 +46,7 @@ namespace Dynamo.PackageManager
         /// This event is raised when a package is fully loaded. It will be true that when this event is raised
         /// Packge.Loaded will be true for the package.
         /// </summary>
+        // TODO 3.0 Fix spelling
         public event Action<Package> PackgeLoaded;
 
         /// <summary>
@@ -71,6 +75,8 @@ namespace Dynamo.PackageManager
             get { return packagesDirectories[0]; }
         }
 
+        private readonly List<string> packagesDirectoriesToVerifyCertificates = new List<string>();
+
         public PackageLoader(string overridePackageDirectory)
             : this(new[] { overridePackageDirectory })
         {
@@ -86,6 +92,20 @@ namespace Dynamo.PackageManager
 
             if (error != null)
                 Log(error);
+        }
+
+        /// <summary>
+        /// Initialize a new instance of PackageLoader class
+        /// </summary>
+        /// <param name="packagesDirectories">Default package directories</param>
+        /// <param name="packageDirectoriesToVerify">Default package directories where node library files require certificate verification before loading</param>
+        public PackageLoader(IEnumerable<string> packagesDirectories, IEnumerable<string> packageDirectoriesToVerify)
+            : this(packagesDirectories)
+        {
+            if (packageDirectoriesToVerify == null)
+                throw new ArgumentNullException("packageDirectoriesToVerify");
+
+            this.packagesDirectoriesToVerifyCertificates.AddRange(packageDirectoriesToVerify);
         }
 
         private void OnPackageAdded(Package pkg)
@@ -137,21 +157,27 @@ namespace Dynamo.PackageManager
             }
         }
 
-        private IEnumerable<CustomNodeInfo> OnRequestLoadCustomNodeDirectory(string directory)
+        private void OnPackagesLoaded(IEnumerable<Assembly> assemblies)
+        {
+            PackagesLoaded?.Invoke(assemblies);
+        }
+
+        private IEnumerable<CustomNodeInfo> OnRequestLoadCustomNodeDirectory(string directory, Graph.Workspaces.PackageInfo packageInfo)
         {
             if (RequestLoadCustomNodeDirectory != null)
             {
-                return RequestLoadCustomNodeDirectory(directory);
+                return RequestLoadCustomNodeDirectory(directory, packageInfo);
             }
 
             return new List<CustomNodeInfo>();
         }
 
         /// <summary>
-        ///     Load the package into Dynamo (including all node libraries and custom nodes)
-        ///     and add to LocalPackages
+        /// Try loading package into Library (including all node libraries and custom nodes)
+        /// and add to LocalPackages.
         /// </summary>
-        public void Load(Package package)
+        /// <param name="package"></param>
+        internal void TryLoadPackageIntoLibrary(Package package)
         {
             this.Add(package);
 
@@ -169,15 +195,15 @@ namespace Dynamo.PackageManager
                         {
                             OnRequestLoadNodeLibrary(assem.Assembly);
                         }
-                        catch (Dynamo.Exceptions.LibraryLoadFailedException ex)
+                        catch (LibraryLoadFailedException ex)
                         {
                             Log(ex.GetType() + ": " + ex.Message);
                         }
                     }
                 }
-
                 // load custom nodes
-                var customNodes = OnRequestLoadCustomNodeDirectory(package.CustomNodeDirectory);
+                var packageInfo = new Graph.Workspaces.PackageInfo(package.Name, new Version(package.VersionName));
+                var customNodes = OnRequestLoadCustomNodeDirectory(package.CustomNodeDirectory, packageInfo);
                 package.LoadedCustomNodes.AddRange(customNodes);
 
                 package.EnumerateAdditionalFiles();
@@ -197,11 +223,43 @@ namespace Dynamo.PackageManager
                 package.Loaded = true;
                 this.PackgeLoaded?.Invoke(package);
             }
+            catch (CustomNodePackageLoadException e)
+            {
+                Package originalPackage =
+                    localPackages.FirstOrDefault(x => x.CustomNodeDirectory == e.InstalledPath);
+                OnConflictingPackageLoaded(originalPackage, package);
+            }
             catch (Exception e)
             {
                 Log("Exception when attempting to load package " + package.Name + " from " + package.RootDirectory);
                 Log(e.GetType() + ": " + e.Message);
             }
+        }
+
+        /// <summary>
+        /// Event raised when a custom node package containing conflicting node definition
+        /// with an existing package is tried to load.
+        /// </summary>
+        public event Action<Package, Package> ConflictingCustomNodePackageLoaded;
+        private void OnConflictingPackageLoaded(Package installed, Package conflicting)
+        {
+            var handler = ConflictingCustomNodePackageLoaded;
+            handler?.Invoke(installed, conflicting);
+        }
+
+        /// <summary>
+        ///     Load the package into Dynamo (including all node libraries and custom nodes)
+        ///     and add to LocalPackages.
+        /// </summary>
+        // TODO: Remove in 3.0 (Refer to PR #9736).
+        [Obsolete("This API will be deprecated in 3.0. Use LoadPackages(IEnumerable<Package> packages) instead.")]
+        public void Load(Package package)
+        {
+            TryLoadPackageIntoLibrary(package);
+
+            var assemblies =
+                LocalPackages.SelectMany(x => x.EnumerateAssembliesInBinDirectory().Where(y => y.IsNodeLibrary));
+            OnPackagesLoaded(assemblies.Select(x => x.Assembly));
         }
 
         /// <summary>
@@ -216,7 +274,7 @@ namespace Dynamo.PackageManager
             {
                 foreach (var pkg in LocalPackages)
                 {
-                    if (File.Exists(pkg.BinaryDirectory))
+                    if (Directory.Exists(pkg.BinaryDirectory))
                     {
                         pathManager.AddResolutionPath(pkg.BinaryDirectory);
                     }
@@ -224,11 +282,51 @@ namespace Dynamo.PackageManager
                 }
             }
 
-            foreach (var pkg in LocalPackages)
+            if (LocalPackages.Any())
             {
-                Load(pkg);
+                LoadPackages(LocalPackages);
             }
         }
+
+        /// <summary>
+        /// Loads and imports all packages. 
+        /// </summary>
+        /// <param name="packages"></param>
+        public void LoadPackages(IEnumerable<Package> packages)
+        {
+            var packageList = packages.ToList();
+
+            // This fix is in reference to the crash reported in task: https://jira.autodesk.com/browse/DYN-2101
+            // TODO: https://jira.autodesk.com/browse/DYN-2120. we will be re-evaluating this workflow, to find the best clean solution.
+
+            // The reason for this crash is, when a new package is being loaded into the dynamo, it will reload 
+            // all the libraries into the VM. Since the graph execution runs are triggered asynchronously, it causes 
+            // an exception as the VM is reinitialized during the execution run. To avoid this, we disable the execution run's that
+            // are triggered while the package is still being loaded. Once the package is completely loaded and the VM is reinitialized,
+            // a final run is triggered that would execute the nodes in the workspace after resolving them.  
+
+            // Disabling the run here since new packages are being loaded. 
+            EngineController.DisableRun = true;
+
+            foreach (var pkg in packageList)
+            {
+                // If the pkg is null, then don't load that package into the Library.
+                if (pkg != null)
+                {
+                    TryLoadPackageIntoLibrary(pkg);
+                }
+            }
+
+            // Setting back the DisableRun property back to false, as the package loading is completed.
+            EngineController.DisableRun = false;
+
+            var assemblies = packageList
+                .SelectMany(p => p.LoadedAssemblies.Where(y => y.IsNodeLibrary))
+                .Select(a => a.Assembly)
+                .ToList();
+            OnPackagesLoaded(assemblies);
+        }
+
         public void LoadCustomNodesAndPackages(LoadPackageParams loadPackageParams, CustomNodeManager customNodeManager)
         {
             foreach (var path in loadPackageParams.Preferences.CustomPackageFolders)
@@ -276,7 +374,20 @@ namespace Dynamo.PackageManager
                 foreach (var dir in
                     Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
                 {
-                    var pkg = ScanPackageDirectory(dir);
+                    
+                    // verify if the package directory requires certificate verifications
+                    // This is done by default for the package directory defined in PathManager common directory location.
+                    var checkCertificates = false;
+                    foreach (var pathToVerifyCert in packagesDirectoriesToVerifyCertificates)
+                    {
+                        if (root.Contains(pathToVerifyCert))
+                        {
+                            checkCertificates = true;
+                            break;
+                        }
+                    }
+
+                    var pkg = ScanPackageDirectory(dir, checkCertificates);
                     if (pkg != null && preferences.PackageDirectoriesToUninstall.Contains(dir))
                         pkg.MarkForUninstall(preferences);
                 }
@@ -287,6 +398,11 @@ namespace Dynamo.PackageManager
         }
 
         public Package ScanPackageDirectory(string directory)
+        {
+            return ScanPackageDirectory(directory, false);
+        }
+
+        public Package ScanPackageDirectory(string directory, bool checkCertificates)
         {
             try
             {
@@ -299,11 +415,17 @@ namespace Dynamo.PackageManager
                 {
                     discoveredPkg = Package.FromJson(headerPath, AsLogger());
                     if (discoveredPkg == null)
-                        throw new Exception(String.Format(Properties.Resources.MalformedHeaderPackage, headerPath));
+                        throw new LibraryLoadFailedException(directory, String.Format(Properties.Resources.MalformedHeaderPackage, headerPath));
                 }
                 else
                 {
-                    throw new Exception(String.Format(Properties.Resources.NoHeaderPackage, headerPath));
+                    throw new LibraryLoadFailedException(directory, String.Format(Properties.Resources.NoHeaderPackage, headerPath));
+                }
+
+                // prevent loading unsigned packages if the certificates are required on package dlls
+                if (checkCertificates)
+                {
+                    CheckPackageNodeLibraryCertificates(directory, discoveredPkg);
                 }
 
                 // prevent duplicates
@@ -312,7 +434,7 @@ namespace Dynamo.PackageManager
                     this.Add(discoveredPkg);
                     return discoveredPkg; // success
                 }
-                throw new Exception(String.Format(Properties.Resources.DulicatedPackage, discoveredPkg.Name, discoveredPkg.RootDirectory));
+                throw new LibraryLoadFailedException(directory, String.Format(Properties.Resources.DulicatedPackage, discoveredPkg.Name, discoveredPkg.RootDirectory));
             }
             catch (Exception e)
             {
@@ -321,6 +443,58 @@ namespace Dynamo.PackageManager
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Check the node libraries defined in the package json file are valid and have a valid certificate
+        /// </summary>
+        /// <param name="packageDirectoryPath">path to package location</param>
+        /// <param name="discoveredPkg">package object to check</param>
+        private static void CheckPackageNodeLibraryCertificates(string packageDirectoryPath, Package discoveredPkg)
+        {
+            var dllfiles = new System.IO.DirectoryInfo(discoveredPkg.BinaryDirectory).EnumerateFiles("*.dll");
+            if (discoveredPkg.Header.node_libraries.Count() == 0 && dllfiles.Count() != 0)
+            {
+                throw new LibraryLoadFailedException(packageDirectoryPath,
+                    String.Format(
+                        Resources.InvalidPackageNoNodeLibrariesDefinedInPackageJson,
+                        discoveredPkg.Name, discoveredPkg.RootDirectory));
+            }
+
+            foreach (var nodeLibraryAssembly in discoveredPkg.Header.node_libraries)
+            {
+
+                //Try to get the assembly name from the manifest file
+                string filename;
+                try
+                {
+                    filename = new AssemblyName(nodeLibraryAssembly).Name + ".dll";
+                }
+                catch
+                {
+                    throw new LibraryLoadFailedException(packageDirectoryPath,
+                        String.Format(
+                            Resources.InvalidPackageMalformedNodeLibraryDefinition,
+                            discoveredPkg.Name, discoveredPkg.RootDirectory));
+                }
+
+                //Verify the node library exists in the package bin directory and has a valid certificate
+                var filepath = Path.Combine(discoveredPkg.BinaryDirectory, filename);
+                try
+                {
+                    CertificateVerification.CheckAssemblyForValidCertificate(filepath);
+                }
+                catch (Exception e)
+                {
+                    throw new LibraryLoadFailedException(packageDirectoryPath,
+                        String.Format(
+                            Resources.InvalidPackageNodeLibraryIsNotSigned,
+                            discoveredPkg.Name, discoveredPkg.RootDirectory, e.Message));
+                }
+                
+            }
+
+            discoveredPkg.RequiresSignedEntryPoints = true;
         }
 
         /// <summary>

@@ -13,6 +13,7 @@ namespace Dynamo.Interfaces
         /// Collection of pairs [BackgroundPreviewName;isActive]
         /// </summary>
         List<BackgroundPreviewActiveState> BackgroundPreviews { get; set; }
+
         /// <summary>
         /// Indicates if preview bubbles should be displayed on nodes.
         /// </summary>
@@ -145,6 +146,18 @@ namespace Dynamo.Interfaces
         /// <param name="name">Background preview name</param>
         /// <param name="value">Active state to set</param>
         void SetIsBackgroundPreviewActive(string name, bool value);
+    }
+
+    /// <summary>
+    /// Temporary interface to avoid breaking changes.
+    /// TODO: Merge with IPreferences for 3.0 (DYN-1699)
+    /// </summary>
+    public interface IRenderPrecisionPreference
+    {
+        ///<summary>
+        ///Indicate which render precision will be used
+        ///</summary>
+        int RenderPrecision { get; set; }
     }
 
     /// <summary>

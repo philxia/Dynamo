@@ -1,18 +1,39 @@
 ﻿using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using Dynamo.Logging;
+using Dynamo.ViewModels;
 using Dynamo.Wpf.Extensions;
+using Microsoft.Practices.Prism;
 
 namespace Dynamo.Notifications
 {
-    public class NotificationsViewExtension : IViewExtension
+    public class NotificationsViewExtension : IViewExtension, INotifyPropertyChanged
     {
         private ViewLoadedParams viewLoadedParams;
         private Action<Logging.NotificationMessage> notificationHandler;
-        public ObservableCollection<Logging.NotificationMessage> Notifications { get; private set; }
+
+        private ObservableCollection<Logging.NotificationMessage> notifications;
+        /// <summary>
+        /// Notifications data collection. PropertyChanged event is raised to help dealing WPF bind dispose.
+        /// </summary>
+        public ObservableCollection<Logging.NotificationMessage> Notifications
+        {
+            get { return notifications; }
+            private set
+            {
+                if(notifications != value)
+                    notifications = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Notifications)));
+            }
+        }
+
         private NotificationsMenuItem notificationsMenuItem;
+        private DynamoLogger logger;
 
         public string Name
         {
@@ -31,7 +52,9 @@ namespace Dynamo.Notifications
         }
 
         internal Window dynamoWindow;
-        
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
         public void Dispose()
         {
             UnregisterEventHandlers();
@@ -51,15 +74,19 @@ namespace Dynamo.Notifications
         {
             viewLoadedParams = p;
             dynamoWindow = p.DynamoWindow;
+            var viewModel = dynamoWindow.DataContext as DynamoViewModel;
+            logger = viewModel.Model.Logger;
+
             Notifications = new ObservableCollection<Logging.NotificationMessage>();
             
-            notificationHandler = new Action<Logging.NotificationMessage>((notificationMessage) =>
+            notificationHandler = (notificationMessage) =>
             {
                 Notifications.Add(notificationMessage);
-            });
+                AddNotifications();
+            };
 
             p.NotificationRecieved += notificationHandler;
-             
+
             //add a new menuItem to the Dynamo mainMenu.
             notificationsMenuItem = new NotificationsMenuItem(this);
             //null out the content of the notificationsMenu to get rid of 
@@ -67,6 +94,12 @@ namespace Dynamo.Notifications
             (notificationsMenuItem.MenuItem.Parent as ContentControl).Content = null;
             //place the menu into the DynamoMenu
             p.dynamoMenu.Items.Add(notificationsMenuItem.MenuItem);
+        }
+
+        internal void AddNotifications()
+        {
+            Notifications.AddRange(logger.StartupNotifications);
+            logger.ClearStartupNotifications();
         }
 
         public void Shutdown()

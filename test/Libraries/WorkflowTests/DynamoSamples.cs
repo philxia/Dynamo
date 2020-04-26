@@ -1,11 +1,11 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-using Autodesk.DesignScript.Geometry;
-using NUnit.Framework;
-using System.Collections.Generic;
 using System.Linq;
+using Autodesk.DesignScript.Geometry;
 using CoreNodeModels.Input;
 using Dynamo.Graph.Nodes;
+using NUnit.Framework;
 
 namespace Dynamo.Tests
 {
@@ -554,7 +554,7 @@ namespace Dynamo.Tests
 
         }
 
-        [Test]
+        [Test, Category("ExcelTest")]
             //Todo Ritesh: Locally passing but failing on CI.
             //After fixing issue with this test case add Smoke Test Category.
         public void ImportExport_Excel_to_Dynamo()

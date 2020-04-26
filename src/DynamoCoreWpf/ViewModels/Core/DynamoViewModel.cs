@@ -275,6 +275,22 @@ namespace Dynamo.ViewModels
         }
 
         /// <summary>
+        /// Indicates if line numbers should be displayed on code block nodes.
+        /// </summary>
+        public bool ShowCodeBlockLineNumber
+        {
+            get
+            {
+                return model.PreferenceSettings.ShowCodeBlockLineNumber;
+            }
+            set
+            {
+                model.PreferenceSettings.ShowCodeBlockLineNumber = value;
+                RaisePropertyChanged(nameof(ShowCodeBlockLineNumber));
+            }
+        }
+
+        /// <summary>
         /// Indicates whether to make T-Spline nodes (under ProtoGeometry.dll) discoverable
         /// in the node search library.
         /// </summary>
@@ -415,6 +431,7 @@ namespace Dynamo.ViewModels
 
         public IWatchHandler WatchHandler { get; private set; }
 
+        [Obsolete("This Property will be obsoleted in Dynamo 3.0.")]
         public SearchViewModel SearchViewModel { get; private set; }
 
         public PackageManagerClientViewModel PackageManagerClientViewModel { get; private set; }
@@ -468,7 +485,9 @@ namespace Dynamo.ViewModels
         {
             get { return BackgroundPreviewViewModel.Active; }
         }
-        
+
+        public bool HideReportOptions { get; }
+
         #endregion
 
         public struct StartConfiguration
@@ -484,6 +503,11 @@ namespace Dynamo.ViewModels
             /// at startup in order to be used to pass in host specific resources to DynamoViewModel
             /// </summary>
             public IBrandingResourceProvider BrandingResourceProvider { get; set; }
+
+            /// <summary>
+            /// If true, Analytics and Usage options are hidden from UI 
+            /// </summary>
+            public bool HideReportOptions { get; set; }
         }
 
         public static DynamoViewModel Start(StartConfiguration startConfiguration = new StartConfiguration())
@@ -531,11 +555,12 @@ namespace Dynamo.ViewModels
             this.model.CommandStarting += OnModelCommandStarting;
             this.model.CommandCompleted += OnModelCommandCompleted;
 
+            this.HideReportOptions = startConfiguration.HideReportOptions;
             UsageReportingManager.Instance.InitializeCore(this);
             this.WatchHandler = startConfiguration.WatchHandler;
             var pmExtension = model.GetPackageManagerExtension();
             this.PackageManagerClientViewModel = new PackageManagerClientViewModel(this, pmExtension.PackageManagerClient);
-            this.SearchViewModel = new SearchViewModel(this);
+            this.SearchViewModel = null;
 
             // Start page should not show up during test mode.
             this.ShowStartPage = !DynamoModel.IsTestMode;
@@ -601,16 +626,19 @@ namespace Dynamo.ViewModels
 
         private void RenderPackageFactoryViewModel_PropertyChanged(object sender, PropertyChangedEventArgs e)
         {
+            var factoryVm = (RenderPackageFactoryViewModel)sender;
             switch (e.PropertyName)
             {
                 case "ShowEdges":
-                    var factoryVm = (RenderPackageFactoryViewModel)sender;
                     model.PreferenceSettings.ShowEdges = factoryVm.Factory.TessellationParameters.ShowEdges;
                     // A full regeneration is required to get the edge geometry.
                     foreach (var vm in Watch3DViewModels)
                     {
                         vm.RegenerateAllPackages();
                     }
+                    break;
+                case "MaxTessellationDivisions":
+                    model.PreferenceSettings.RenderPrecision = factoryVm.Factory.TessellationParameters.MaxTessellationDivisions;
                     break;
                 default:
                     return;
@@ -696,12 +724,14 @@ namespace Dynamo.ViewModels
         {
             model.RequestBugReport += ReportABug;
             model.RequestDownloadDynamo += DownloadDynamo;
+            model.Preview3DOutage += Disable3DPreview;
         }
 
         private void UnsubscribeModelUiEvents()
         {
             model.RequestBugReport -= ReportABug;
             model.RequestDownloadDynamo -= DownloadDynamo;
+            model.Preview3DOutage -= Disable3DPreview;
         }
 
         private void SubscribeModelCleaningUpEvent()
@@ -838,6 +868,14 @@ namespace Dynamo.ViewModels
         internal static void DownloadDynamo()
         {
             Process.Start(new ProcessStartInfo("explorer.exe", Configurations.DynamoDownloadLink));
+        }
+
+        private void Disable3DPreview()
+        {
+            foreach (var item in Watch3DViewModels)
+            {
+                item.Active = false;
+            }
         }
 
         internal bool CanReportABug(object parameter)
@@ -1370,7 +1408,7 @@ namespace Dynamo.ViewModels
             {
                 Assembly dynamoAssembly = Assembly.GetExecutingAssembly();
                 string location = Path.GetDirectoryName(dynamoAssembly.Location);
-                string UICulture = CultureInfo.CurrentUICulture.ToString();
+                string UICulture = CultureInfo.CurrentUICulture.Name;
                 string path = Path.Combine(location, "samples", UICulture);
 
                 if (Directory.Exists(path))
@@ -1461,9 +1499,7 @@ namespace Dynamo.ViewModels
             try
             {
                 Model.Logger.Log(String.Format(Properties.Resources.SavingInProgress, path));
-
                 CurrentSpaceViewModel.Save(path, isBackup, Model.EngineController);
-
                 if(!isBackup) AddToRecentFiles(path);
             }
             catch (Exception ex)
@@ -1476,7 +1512,34 @@ namespace Dynamo.ViewModels
             }
         }
 
-        
+        /// <summary>
+        /// Save the current workspace to a specific file path. If the file path is null or empty, an
+        /// exception is written to the console.
+        /// </summary>
+        /// <param name="id">Indicate the id of target workspace view model instead of defaulting to 
+        /// current workspace view model. This is critical in crash cases.</param>
+        /// <param name="path">The path to the file.</param>
+        /// <param name="isBackup">Indicates if an automated backup save has called this function.</param>
+        /// <exception cref="IOException"></exception>
+        /// <exception cref="UnauthorizedAccessException"></exception>
+        internal void SaveAs(Guid id, string path, bool isBackup = false)
+        {
+            try
+            {
+                Model.Logger.Log(String.Format(Properties.Resources.SavingInProgress, path));
+                Workspaces.Where(w => w.Model.Guid == id).FirstOrDefault().Save(path, isBackup, Model.EngineController);
+                if (!isBackup) AddToRecentFiles(path);
+            }
+            catch (Exception ex)
+            {
+                Model.Logger.Log(ex.Message);
+                Model.Logger.Log(ex.StackTrace);
+
+                if (ex is IOException || ex is UnauthorizedAccessException)
+                    System.Windows.MessageBox.Show(String.Format(ex.Message, MessageBoxButtons.OK, MessageBoxIcon.Warning));
+            }
+        }
+
         /// <summary>
         ///     Attempts to save a given workspace.  Shows a save as dialog if the 
         ///     workspace does not already have a path associated with it
@@ -1488,21 +1551,18 @@ namespace Dynamo.ViewModels
             // crash should always allow save as
             if (!String.IsNullOrEmpty(workspace.FileName) && !DynamoModel.IsCrashing)
             {
-                SaveAs(workspace.FileName);
+                SaveAs(workspace.Guid, workspace.FileName);
                 return true;
             }
             else
             {
-                //TODO(ben): We still add a cancel button to the save dialog if we're crashing
-                // sadly it's not usually possible to cancel a crash
-
                 var fd = this.GetSaveDialog(workspace);
-                // since the workspace file directory is null, we set the initial directory
+                // Since the workspace file directory is null, we set the initial directory
                 // for the file to be MyDocument folder in the local computer. 
                 fd.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
                 if (fd.ShowDialog() == DialogResult.OK)
                 {
-                    SaveAs(fd.FileName);
+                    SaveAs(workspace.Guid, fd.FileName);
                     return true;
                 }
             }
@@ -1983,7 +2043,6 @@ namespace Dynamo.ViewModels
                 {
                     AddExtension = true,
                     DefaultExt = ".png",
-                    FileName = Resources.FileDialogDefaultPNGName,
                     Filter = string.Format(Resources.FileDialogPNGFiles, "*.png"),
                     Title = Resources.SaveWorkbenToImageDialogTitle
                 };
@@ -1993,7 +2052,9 @@ namespace Dynamo.ViewModels
             if (!string.IsNullOrEmpty(model.CurrentWorkspace.FileName))
             {
                 var fi = new FileInfo(model.CurrentWorkspace.FileName);
+                var snapshotName = PathHelper.GetScreenCaptureNameFromPath(fi.FullName);
                 _fileDialog.InitialDirectory = fi.DirectoryName;
+                _fileDialog.FileName = snapshotName;
             }
 
             if (_fileDialog.ShowDialog() != DialogResult.OK) return;
@@ -2213,6 +2274,11 @@ namespace Dynamo.ViewModels
             ZoomInCommand.RaiseCanExecuteChanged();
         }
 
+        internal void OpenDocumentationLink(object parameter)
+        {
+            OnRequestOpenDocumentationLink((OpenDocumentationLinkEventArgs)parameter);
+        }
+
         private bool CanZoomIn(object parameter)
         {
             return CurrentSpaceViewModel.CanZoomIn;
@@ -2286,7 +2352,7 @@ namespace Dynamo.ViewModels
                                 string.Format(detailedMessage, file));
                         }
                     }
-                    SearchViewModel.SearchAndUpdateResults();
+                    CurrentSpaceViewModel.InCanvasSearchViewModel.SearchAndUpdateResults();
                 }
                 catch(LibraryLoadFailedException ex)
                 {

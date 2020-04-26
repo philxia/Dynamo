@@ -1,9 +1,11 @@
-﻿using Greg;
-using Greg.Requests;
-using Greg.Responses;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Dynamo.Graph.Workspaces;
+using Greg;
+using Greg.Requests;
+using Greg.Responses;
+using System.Linq;
 
 namespace Dynamo.PackageManager
 {
@@ -56,15 +58,6 @@ namespace Dynamo.PackageManager
             }, false);
         }
 
-        internal bool Downvote(string packageId)
-        {
-            return FailFunc.TryExecute(() =>
-            {
-                var pkgResponse = this.client.ExecuteAndDeserialize(new Downvote(packageId));
-                return pkgResponse.success;
-            }, false);
-        }
-
         internal PackageManagerResult DownloadPackage(string packageId, string version, out string pathToPackage)
         {
             try
@@ -87,6 +80,69 @@ namespace Dynamo.PackageManager
                 var pkgResponse = this.client.ExecuteAndDeserializeWithContent<List<PackageHeader>>(nv);
                 return pkgResponse.content;
             }, new List<PackageHeader>());
+        }
+
+        /// <summary>
+        /// Gets maintainers for a specific package
+        /// </summary>
+        /// <param name="packageInfo"></param>
+        /// <returns></returns>
+        internal PackageHeader GetPackageMaintainers(IPackageInfo packageInfo)
+        {
+            var header = FailFunc.TryExecute(() =>
+            {
+                var nv = new GetMaintainers("dynamo", packageInfo.Name);
+                var pkgResponse = this.client.ExecuteAndDeserializeWithContent<PackageHeader>(nv);
+                return pkgResponse.content;
+            }, null);
+
+            return header;
+        }
+
+        /// <summary>
+        /// Gets the metadata for a specific version of a package.
+        /// </summary>
+        /// <param name="packageInfo">Name and version of a package</param>
+        /// <returns>Package version metadata</returns>
+        internal PackageVersion GetPackageVersionHeader(IPackageInfo packageInfo)
+        {
+            var req = new HeaderVersionDownload("dynamo", packageInfo.Name, packageInfo.Version.ToString());
+            var pkgResponse = this.client.ExecuteAndDeserializeWithContent<PackageVersion>(req);
+            if (!pkgResponse.success)
+            {
+                throw new Exception(pkgResponse.message);
+            }
+            return pkgResponse.content;
+        }
+
+        /// <summary>
+        /// Gets the metadata for a specific version of a package.
+        /// </summary>
+        /// <param name="packageInfo">Name and version of a package</param>
+        /// <returns>Package version metadata</returns>
+        internal PackageVersion GetPackageVersionHeader(string id, string version)
+        {
+            var req = new HeaderVersionDownload(id, version);
+            var pkgResponse = this.client.ExecuteAndDeserializeWithContent<PackageVersion>(req);
+            if (!pkgResponse.success)
+            {
+                throw new Exception(pkgResponse.message);
+            }
+            return pkgResponse.content;
+        }
+
+        /// <summary>
+        /// Make a call to Package Manager to get the known
+        /// supported hosts for package publishing and filtering
+        /// </summary>
+        internal IEnumerable<string> GetKnownHosts()
+        {
+            return FailFunc.TryExecute(() =>
+            {
+                var hosts = new Hosts();
+                var hostsResponse = this.client.ExecuteAndDeserializeWithContent<List<String>>(hosts);
+                return hostsResponse.content;
+            }, new List<string>());
         }
 
         internal bool GetTermsOfUseAcceptanceStatus()
@@ -160,6 +216,7 @@ namespace Dynamo.PackageManager
             }
         }
 
+        [Obsolete("No longer used. Delete in 3.0")]
         internal PackageManagerResult DownloadPackageHeader(string id, out PackageHeader header)
         {
             var pkgDownload = new HeaderDownload(id);
@@ -196,6 +253,13 @@ namespace Dynamo.PackageManager
                 var pkgResponse = this.client.ExecuteAndDeserialize(new Undeprecate(name, PackageEngineName));
                 return new PackageManagerResult(pkgResponse.message, pkgResponse.success);
             }, new PackageManagerResult("Failed to send.", false));
+        }
+
+        internal bool DoesCurrentUserOwnPackage(Package package,string username) 
+        {
+            var pkg = new PackageInfo(package.Name, new Version(package.VersionName));
+            var mnt = GetPackageMaintainers(pkg);
+            return (mnt != null) && (mnt.maintainers.Any(maintainer => maintainer.username.Equals(username)));
         }
     }
 }

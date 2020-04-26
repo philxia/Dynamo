@@ -1,20 +1,18 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using ProtoCore.DSASM;
-using ProtoCore.Utils;
-using System.Reflection;
 using System.ComponentModel;
-using Autodesk.DesignScript.Interfaces;
-using System.Xml.Serialization;
-using System.Text;
 using System.IO;
-using System.Xml;
 using System.Linq;
+using System.Reflection;
+using System.Xml;
+using Autodesk.DesignScript.Interfaces;
 using DesignScript.Builtin;
-using ProtoCore.Properties;
+using ProtoCore.DSASM;
 using ProtoCore.Exceptions;
+using ProtoCore.Properties;
 using ProtoCore.Runtime;
+using ProtoCore.Utils;
 
 namespace ProtoFFI
 {
@@ -614,6 +612,9 @@ namespace ProtoFFI
     class CLRObjectMarshaler : FFIObjectMarshaler
     {
         private static readonly Dictionary<Type, FFIObjectMarshaler> mPrimitiveMarshalers;
+        private Type mCachedObjType;
+        private int mCachedType;
+
         static CLRObjectMarshaler()
         {
             mPrimitiveMarshalers = new Dictionary<Type, FFIObjectMarshaler>();
@@ -731,8 +732,7 @@ namespace ProtoFFI
                 return marshaler.UnMarshal(dsObject, context, dsi, expectedCLRType);
 
             //The dsObject must be of pointer type
-            Validity.Assert(dsObject.IsPointer || dsObject.IsFunctionPointer, 
-                string.Format("Operand type {0} not supported for marshalling", dsObject.optype));
+            Validity.Assert(dsObject.IsPointer || dsObject.IsFunctionPointer, "Operand type not supported for marshaling");
 
             if (dsObject.IsFunctionPointer)
             {
@@ -1108,20 +1108,27 @@ namespace ProtoFFI
         {
             //We are here, because we want to create DS object of user defined type.
             var runtimeCore = dsi.runtime.RuntimeCore;
-            var classTable = runtimeCore.DSExecutable.classTable;
             Type objType = GetPublicType(obj.GetType());
-            int type = classTable.IndexOf(GetTypeName(objType));
-            //Recursively get the base class type if available.
-            while (type == -1 && objType != null)
+
+            if (mCachedObjType != objType)
             {
-                objType = objType.BaseType;
-                if (null != objType)
-                    type = classTable.IndexOf(GetTypeName(objType));
+                mCachedObjType = objType;
+
+                var classTable = runtimeCore.DSExecutable.classTable;
+                mCachedType = classTable.IndexOf(GetTypeName(objType));
+                
+                //Recursively get the base class type if available.
+                while (mCachedType == -1 && objType != null)
+                {
+                    objType = objType.BaseType;
+                    if (null != objType)
+                        mCachedType = classTable.IndexOf(GetTypeName(objType));
+                }
             }
 
             MetaData metadata;
-            metadata.type = type;
-            StackValue retval = runtimeCore.RuntimeMemory.Heap.AllocatePointer(classTable.ClassNodes[type].Size, metadata);
+            metadata.type = mCachedType;
+            StackValue retval = runtimeCore.RuntimeMemory.Heap.AllocatePointer(0, metadata);
             BindObjects(obj, retval);
             return retval;
         }

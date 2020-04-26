@@ -3,23 +3,20 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using CoreNodeModels;
-using DesignScript.Builtin;
 using Dynamo.Engine.CodeCompletion;
 using Dynamo.Graph;
 using Dynamo.Graph.Connectors;
 using Dynamo.Graph.Nodes;
 using Dynamo.Graph.Nodes.ZeroTouch;
+using Dynamo.Graph.Workspaces;
+using Dynamo.Models;
+using Dynamo.Properties;
 using NUnit.Framework;
-
 using ProtoCore.AST.AssociativeAST;
 using ProtoCore.DSASM;
 using ProtoCore.Mirror;
 using ProtoCore.Utils;
-
 using DynCmd = Dynamo.Models.DynamoModel;
-using Dynamo.Models;
-using Dynamo.Graph.Workspaces;
-using Dynamo.Properties;
 
 namespace Dynamo.Tests
 {
@@ -212,6 +209,87 @@ b = c[w][x][y][z];";
 #endif
         protected double tolerance = 1e-4;
 
+        // Note: This test fails, even though the individual items pass as separate tests
+        //       This is preventing putting all of the tests in a single method
+        //[Test]
+        //[Category("UnitTests")]
+        //public void TestFunctionDefaultParameters()
+        //{
+        //    var codeBlockNode = CreateCodeBlockNode();
+        //    var guid = codeBlockNode.GUID.ToString();
+
+        //    UpdateCodeBlockNodeContent(codeBlockNode, "def test(x:int = 1){return = x;}test();");
+        //    AssertPreviewValue(guid, 1);
+
+        //    UpdateCodeBlockNodeContent(codeBlockNode, "def test(x:int = 1, y:int= 2){return = x + y;}test();");
+        //    AssertPreviewValue(guid, 3);
+        //}
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestFunctionSingleDefaultParameter()
+        {
+            var codeBlockNode = CreateCodeBlockNode();
+            UpdateCodeBlockNodeContent(codeBlockNode, "def test(x:int = 1){return = x;}test();");
+            AssertPreviewValue(codeBlockNode.GUID.ToString(), 1);
+        }
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestFunctionTwoDefaultParameters()
+        {
+            var codeBlockNode = CreateCodeBlockNode();
+            UpdateCodeBlockNodeContent(codeBlockNode, "def test(x:int = 1, y:int= 2){return = x + y;}test();");
+            AssertPreviewValue(codeBlockNode.GUID.ToString(), 3);
+        }
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestFunctionThreeDefaultParameters()
+        {
+            var codeBlockNode = CreateCodeBlockNode();
+            UpdateCodeBlockNodeContent(codeBlockNode, "def test(x:int = 1, y:int= 2, z:int= 3){return = x + y + z;}test();");
+            AssertPreviewValue(codeBlockNode.GUID.ToString(), 6);
+        }
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestFunctionOneArgumentOneDefaultParameter()
+        {
+            var codeBlockNode = CreateCodeBlockNode();
+            UpdateCodeBlockNodeContent(codeBlockNode, "def test(x:int, y:int= 2){return = x + y;}test(1);");
+            AssertPreviewValue(codeBlockNode.GUID.ToString(), 3);
+        }
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestFunctionMultipleBlocksDefaultParameters()
+        {
+            var codeBlockNode1 = CreateCodeBlockNode();
+            UpdateCodeBlockNodeContent(codeBlockNode1, "def test1(x:int = 1, y:int= 2){return = x + y;}test1();");
+            var codeBlockNode2 = CreateCodeBlockNode();
+            UpdateCodeBlockNodeContent(codeBlockNode2, "def test2(x, y = 2, z = 3){return = x + y + z;}test2(1);");
+
+            AssertPreviewValue(codeBlockNode1.GUID.ToString(), 3);
+            AssertPreviewValue(codeBlockNode2.GUID.ToString(), 6);
+        }
+
+        // Note: DYN-1684 - This test is expected to fail due to the functions being indeterminate
+        //       We will need to figure out a way to test this once error handling is implemented
+        //[Test]
+        //[Category("UnitTests")]
+        //public void TestIndeterminateFunctionDefaultParameters()
+        //{
+        //    // Note that both code blocks contain functions called "test" that are indeterminate
+        //    var codeBlockNode1 = CreateCodeBlockNode();
+        //    UpdateCodeBlockNodeContent(codeBlockNode1, "def test(x:int = 1, y:int= 2){return = x + y;}test();");
+        //    var codeBlockNode2 = CreateCodeBlockNode();
+        //    UpdateCodeBlockNodeContent(codeBlockNode2, "def test(x, y = 2, z = 3){return = x + y + z;}test(1);");
+
+        //    AssertPreviewValue(codeBlockNode1.GUID.ToString(), 3);
+        //    AssertPreviewValue(codeBlockNode2.GUID.ToString(), 6);
+        //}
+
         [Test]
         [Category("UnitTests")]
         public void TestVarRedefinitionInFunctionDef()
@@ -224,7 +302,7 @@ b = c[w][x][y][z];";
             var guid = "bbf7919d-d578-4b54-90b1-7df8f01483c6";
             var cbn = CurrentDynamoModel.CurrentWorkspace.NodeFromWorkspace<CodeBlockNodeModel>(
                 Guid.Parse(guid));
-            
+
 
             Assert.IsNotNull(cbn);
             Assert.AreEqual(ElementState.PersistentWarning, cbn.State);
@@ -1999,6 +2077,24 @@ var06 = g;
 
         [Test]
         [Category("UnitTests")]
+        public void TestCompletionWithGlobalClassWhenTyping()
+        {
+            var codeCompletionServices = new CodeCompletionServices(libraryServicesCore);
+            string code = "Dupt";
+            var completions = codeCompletionServices.SearchCompletions(code, Guid.Empty);
+
+            // Expected 3 completion items
+            Assert.AreEqual(3, completions.Count());
+
+            string[] expectedValues = {"DupTargetTest", "A.DupTargetTest", "FFITarget.B.DupTargetTest"};
+            var expected = expectedValues.OrderBy(x => x);
+            var actual = completions.Select(x => x.Text).OrderBy(x => x);
+
+            Assert.AreEqual(expected, actual);
+        }
+
+        [Test]
+        [Category("UnitTests")]
         public void TestMethodKeywordCompletionWhenTyping()
         {
             var codeCompletionServices = new CodeCompletionServices(libraryServicesCore);
@@ -2030,6 +2126,29 @@ var06 = g;
             var codeCompletionServices = new CodeCompletionServices(libraryServicesCore);
             var completions = codeCompletionServices.GetCompletionsOnType("x : CodeCompletionClass", "x");
             Assert.AreEqual(5, completions.Count());
+        }
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestCompletionOnDerivedTypeReturnsBaseType()
+        {
+            var codeCompletionServices = new CodeCompletionServices(libraryServicesCore);
+            var completions = codeCompletionServices.GetCompletionsOnType("", "DupTargetTest").ToList();
+            Assert.AreEqual(3, completions.Count);
+            Assert.AreEqual("Foo", completions[0].Text);
+            Assert.AreEqual("DupTargetTest", completions[1].Text);
+            Assert.AreEqual("Bar", completions[2].Text);
+        }
+
+        [Test]
+        [Category("UnitTests")]
+        public void TestCompletionOnBaseTypeReturnsOnlyBaseType()
+        {
+            var codeCompletionServices = new CodeCompletionServices(libraryServicesCore);
+            var completions = codeCompletionServices.GetCompletionsOnType("", "FFITarget.C.B.DupTargetTest").ToList();
+            Assert.AreEqual(2, completions.Count);
+            Assert.AreEqual("DupTargetTest", completions[0].Text);
+            Assert.AreEqual("Foo", completions[1].Text);
         }
 
         [Test]
@@ -2068,7 +2187,7 @@ var06 = g;
             // Expected 1 completion items
             Assert.AreEqual(1, completions.Count());
 
-            string[] expected = { "AnotherClassWithNameConflict" };
+            string[] expected = { "FirstNamespace.AnotherClassWithNameConflict" };
             var actual = completions.Select(x => x.Text).OrderBy(x => x);
 
             Assert.AreEqual(expected, actual);

@@ -1,8 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Threading;
+using Dynamo.Utilities;
 using Dynamo.ViewModels;
 using NUnit.Framework;
 
@@ -46,6 +43,7 @@ namespace Dynamo.Tests
             at DynamoSandbox.DynamoCoreSetup.RunApplication(Application app)";
 
         [Test]
+        [Ignore("Test ignored because the web browser is not closed after the test execution")]
         public void CanReportBugWithNoContent()
         {
             // Create a crash report to submit
@@ -61,6 +59,7 @@ namespace Dynamo.Tests
         }
 
         [Test]
+        [Ignore("Test ignored because the web browser is not closed after the test execution")]
         public void CanReportBugWithContent()
         {
             // Mock Dynamo version
@@ -78,7 +77,7 @@ namespace Dynamo.Tests
         public void StackTraceIncludedInReport()
         {
             // Mock Dynamo version
-            var dynamoVersion = "2.1.0";
+            var dynamoVersion = AssemblyHelper.GetDynamoVersion().ToString();
 
             // Create a crash report to submit
             var crashReport = Wpf.Utilities.CrashUtilities.BuildMarkdownContent(dynamoVersion, StackTrace);
@@ -97,8 +96,9 @@ namespace Dynamo.Tests
             // Verify request contains the dynamoVersion
             Assert.True(decoded.Contains(dynamoVersion));
 
+            // TODO - Can be re-added when stack traces are uploaded automatically (currently manual)
             // Verify request contains the stack trace
-            Assert.True(decoded.Contains(StackTrace));
+            // Assert.True(decoded.Contains(StackTrace));
         }
     }
 }
